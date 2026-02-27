@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BlackJackoss — Card Counting Trainer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- ═══════════════════ HEADER ═══════════════════ -->
+  <header class="header">
+    <div class="header-brand">
+      <span class="brand-icon">♠</span>
+      <h1 class="brand-name">BlackJackoss</h1>
+    </div>
+
+    <div class="header-stats">
+      <div class="stat-chip"
+           data-tooltip="Running Count (Hi-Lo)&#10;2–6  → +1  (cartes basses)&#10;7–9  →  0  (neutres)&#10;T/J/Q/K/A → −1&#10;&#10;Positif = sabot chargé en hautes cartes&#10;→ avantage pour le joueur."
+           data-tp="below"
+           id="stat-rc">
+        <span class="stat-label">RC</span>
+        <span class="stat-value" id="rc-value">0</span>
+      </div>
+      <div class="stat-chip"
+           data-tooltip="True Count&#10;= Running Count ÷ sabots restants&#10;&#10;Normalise le RC quelle que soit&#10;la profondeur du sabot.&#10;TC ≥ +2 → augmenter la mise.&#10;TC ≤ −1 → miser le minimum."
+           data-tp="below"
+           id="stat-tc">
+        <span class="stat-label">TC</span>
+        <span class="stat-value" id="tc-value">0.0</span>
+      </div>
+      <div class="stat-chip"
+           data-tooltip="Sabots restants&#10;Estimation : cartes restantes ÷ 52.&#10;&#10;Utilisé pour calculer le True Count.&#10;Plus la valeur est basse, plus le&#10;comptage est précis et fiable."
+           data-tp="below">
+        <span class="stat-label">Decks</span>
+        <span class="stat-value" id="decks-value">6.0</span>
+      </div>
+    </div>
+
+    <button class="shuffle-btn" id="btn-shuffle"
+            data-tooltip="Force un nouveau sabot mélangé&#10;avec une seed fraîche depuis Determinoss."
+            data-tp="below">⟳ SHUFFLE</button>
+
+    <button class="mode-toggle"
+            data-tooltip="SIMPLE : stratégie de base uniquement.&#10;         RC / TC / sabots masqués.&#10;&#10;HARD   : affiche le comptage complet&#10;         (RC, TC, sabots, shoe bar)."
+            data-tp="below"
+            id="mode-toggle">
+      <span class="mode-toggle-pip" id="mode-pip"></span>
+      <span id="mode-label">SIMPLE</span>
+    </button>
+
+    <div class="header-balance"
+         data-tooltip="Votre bankroll.&#10;&#10;Déduite au DEAL, mise à jour&#10;à la fin de chaque tour.&#10;Commence à $1 000."
+         data-tp="below-left">
+      <span class="balance-label">Balance</span>
+      <span class="balance-value" id="balance-display">$1000</span>
+    </div>
+  </header>
+
+  <!-- ═══════════════════ MAIN LAYOUT ═══════════════════ -->
+  <main class="app-layout">
+
+    <!-- ═══════ GAME TABLE ═══════ -->
+    <section class="game-table" id="game-table">
+
+      <!-- Dealer area -->
+      <div class="dealer-area">
+        <div class="area-label">DEALER</div>
+        <div class="cards-row" id="dealer-cards"></div>
+        <div class="score-display" id="dealer-score">—</div>
+      </div>
+
+      <!-- Seed image overlay (lava lamp frame shown during shuffle) -->
+      <div class="seed-overlay" id="seed-overlay" aria-hidden="true">
+        <img class="seed-img" id="seed-img" alt="Lava lamp entropy frame" />
+        <a class="seed-caption" href="https://determinoss.nathangracia.com" target="_blank" rel="noopener">Entropy source — Determinoss ↗</a>
+      </div>
+
+      <!-- Shoe bar -->
+      <div class="shoe-section">
+        <div class="shoe-bar-wrap"
+             data-tooltip="Sabot — 6 jeux de 52 cartes mélangés.&#10;La barre représente les cartes restantes.&#10;&#10;▎ Marqueur ambré = cut card (25%).&#10;  Quand le sabot atteint ce seuil,&#10;  il est remélangé au prochain tour.">
+          <div class="shoe-bar" id="shoe-bar">
+            <div class="shoe-fill" id="shoe-fill"></div>
+            <div class="shoe-cut-marker" id="shoe-cut-marker"></div>
+          </div>
+          <span class="shoe-label">SHOE</span>
+        </div>
+      </div>
+
+      <!-- Message area -->
+      <div class="message-area" id="message-area"></div>
+
+      <!-- Player area -->
+      <div class="player-area" id="player-area">
+        <div class="area-label">PLAYER</div>
+        <div class="hands-container" id="hands-container"></div>
+      </div>
+
+      <!-- Bet display -->
+      <div class="bet-row">
+        <div class="bet-info"
+             data-tooltip="Mise du tour en cours.&#10;&#10;Cliquez les jetons pour miser.&#10;La mise est déduite du solde au DEAL.&#10;En cas de double ou split, la mise&#10;totale est affichée ici.">
+          <span class="bet-label">BET</span>
+          <span class="bet-value" id="bet-display">$0</span>
+        </div>
+        <div class="bet-chips" id="bet-chips">
+          <button class="chip" data-amount="5">$5</button>
+          <button class="chip" data-amount="25">$25</button>
+          <button class="chip" data-amount="100">$100</button>
+          <button class="chip" data-amount="500">$500</button>
+          <button class="chip chip-clear" id="btn-clear-bet"
+                  data-tooltip="Réinitialise la mise à $0.">CLR</button>
+          <button class="chip chip-auto" id="btn-auto-bet"
+                  data-tooltip="Auto-mise minimum ($5) au début&#10;de chaque tour — économise un clic&#10;par main en session longue.&#10;&#10;Actif = vert · Inactif = gris.">AUTO</button>
+        </div>
+      </div>
+
+      <!-- Action buttons -->
+      <div class="action-row" id="action-row">
+        <button class="action-btn btn-deal" id="btn-deal"
+                data-tooltip="Distribue les cartes et démarre le tour.&#10;Nécessite une mise > $0.">DEAL</button>
+
+        <button class="action-btn btn-hit" id="btn-hit" disabled
+                data-tooltip="Hit — Tirer une carte&#10;&#10;Demande une carte supplémentaire.&#10;Dépasse 21 → bust, tour perdu.">HIT</button>
+
+        <button class="action-btn btn-stand" id="btn-stand" disabled
+                data-tooltip="Stand — Rester&#10;&#10;Terminer son tour sans tirer.&#10;Le dealer joue ensuite (tire jusqu'à 17).">STAND</button>
+
+        <button class="action-btn btn-double" id="btn-double" disabled
+                data-tooltip="Double Down&#10;&#10;Double la mise, reçoit exactement&#10;une carte puis stand automatique.&#10;Disponible sur les 2 premières cartes&#10;seulement (après split inclus).">DOUBLE</button>
+
+        <button class="action-btn btn-split" id="btn-split" disabled
+                data-tooltip="Split — Séparer&#10;&#10;Divise une paire en 2 mains distinctes.&#10;La mise est dupliquée.&#10;Maximum : 4 mains (3 splits).&#10;As : une carte par main, pas de re-split.">SPLIT</button>
+
+        <button class="action-btn btn-surrender" id="btn-surrender" disabled
+                data-tooltip="Surrender — Abandonner&#10;&#10;Récupère 50% de la mise, perd 50%.&#10;Uniquement en toute première action,&#10;hors split.&#10;Utile : 16 vs 9/T/A · 15 vs T.">SURR.</button>
+
+        <button class="action-btn btn-insurance" id="btn-insurance" hidden
+                data-tooltip="Insurance — Assurance&#10;&#10;Disponible quand le dealer montre un As.&#10;Mise annexe = ½ de la mise initiale.&#10;Paie 2:1 si dealer a un Blackjack.&#10;&#10;Désavantageux sauf si TC ≥ +3.">INSURANCE</button>
+
+        <button class="action-btn btn-no-insurance" id="btn-no-insurance" hidden
+                data-tooltip="Refuser l'assurance.&#10;Recommandé dans la plupart des cas.">NO INS.</button>
+      </div>
+
+      <!-- Strategy feedback -->
+      <div class="strategy-feedback" id="strategy-feedback"></div>
+
+    </section>
+
+    <!-- ═══════ STRATEGY PANEL ═══════ -->
+    <aside class="strategy-panel" id="strategy-panel">
+      <button class="strategy-toggle" id="strategy-toggle"
+              data-tooltip="Afficher / masquer&#10;la grille de stratégie de base."
+              data-tp="left">
+        <span class="toggle-icon">≡</span>
+        <span class="toggle-label">STRATEGY</span>
+      </button>
+
+      <div class="strategy-content" id="strategy-content">
+        <h2 class="strategy-title">Basic Strategy</h2>
+        <p class="strategy-subtitle"
+           data-tooltip="6 Decks : 6 jeux de 52 cartes.&#10;S17 : le dealer tient sur soft 17&#10;      (ex : As + 6 = 17 → il reste).&#10;DAS : Double autorisé Après Split.&#10;Surrender : abandon anticipé autorisé&#10;            en première action."
+           data-tp="below">6 Decks · S17 · DAS · Surrender</p>
+
+        <div class="chart-section">
+          <h3 class="chart-title"
+              data-tooltip="Main sans As soft (As compté 1).&#10;Colonnes = carte visible du dealer.&#10;La ligne cyan = votre main actuelle.">Hard Totals</h3>
+          <div id="chart-hard"></div>
+        </div>
+
+        <div class="chart-section">
+          <h3 class="chart-title"
+              data-tooltip="Main avec un As compté 11.&#10;Ex : As + 6 = soft 17 → ligne A,6.&#10;La ligne cyan = votre main actuelle.">Soft Totals</h3>
+          <div id="chart-soft"></div>
+        </div>
+
+        <div class="chart-section">
+          <h3 class="chart-title"
+              data-tooltip="Deux cartes de même valeur.&#10;5,5 traité comme un hard 10 (pas de split).&#10;La ligne cyan = votre main actuelle.">Pairs</h3>
+          <div id="chart-pairs"></div>
+        </div>
+
+        <div class="chart-legend">
+          <div class="legend-item legend-h"
+               data-tooltip="Hit — Tirer une carte.&#10;Meilleur coup selon la stratégie&#10;de base pour cette configuration."
+               data-tp="above-left">H — Hit</div>
+          <div class="legend-item legend-s"
+               data-tooltip="Stand — Rester sans tirer.&#10;Tenir sa main, laisser le dealer jouer."
+               data-tp="above-left">S — Stand</div>
+          <div class="legend-item legend-d"
+               data-tooltip="Double Down — Doubler + une carte.&#10;Si double indisponible → Hit."
+               data-tp="above-left">D — Double</div>
+          <div class="legend-item legend-p"
+               data-tooltip="Split — Séparer la paire.&#10;Si split indisponible → Hit ou Stand."
+               data-tp="above-left">P — Split</div>
+          <div class="legend-item legend-r"
+               data-tooltip="Surrender — Abandonner (50% récupéré).&#10;Si surrender indisponible → Hit."
+               data-tp="above-left">R — Surrender</div>
+        </div>
+      </div>
+    </aside>
+
+  </main>
+
+  <!-- ═══════════════════ SCRIPTS ═══════════════════ -->
+  <script src="js/config.js"></script>
+  <script src="js/strategy.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
