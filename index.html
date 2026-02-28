@@ -6,7 +6,7 @@
   <title>BlackJackoss — Card Counting Trainer</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -63,6 +63,14 @@
   <!-- ═══════════════════ MAIN LAYOUT ═══════════════════ -->
   <main class="app-layout">
 
+    <!-- ═══════ HISTORY ═══════ -->
+    <aside class="history-panel" id="history-panel">
+      <div class="history-title">History</div>
+      <div class="history-list" id="history-list">
+        <div class="history-empty">No hands yet</div>
+      </div>
+    </aside>
+
     <!-- ═══════ GAME TABLE ═══════ -->
     <section class="game-table" id="game-table">
 
@@ -75,8 +83,9 @@
 
       <!-- Seed image overlay (lava lamp frame shown during shuffle) -->
       <div class="seed-overlay" id="seed-overlay" aria-hidden="true">
-        <img class="seed-img" id="seed-img" alt="Lava lamp entropy frame" />
-        <a class="seed-caption" href="https://determinoss.nathangracia.com" target="_blank" rel="noopener">Entropy source — Determinoss ↗</a>
+        <a href="https://determinoss.nathangracia.com" target="_blank" rel="noopener" class="seed-link">
+          <img class="seed-img" id="seed-img" alt="Lava lamp entropy frame" />
+        </a>
       </div>
 
       <!-- Shoe bar -->
@@ -91,8 +100,8 @@
         </div>
       </div>
 
-      <!-- Message area -->
-      <div class="message-area" id="message-area"></div>
+      <!-- Strategy feedback — principal : bonne/mauvaise décision -->
+      <div class="strategy-feedback" id="strategy-feedback"></div>
 
       <!-- Player area -->
       <div class="player-area" id="player-area">
@@ -146,8 +155,8 @@
                 data-tooltip="Refuser l'assurance.&#10;Recommandé dans la plupart des cas.">NO INS.</button>
       </div>
 
-      <!-- Strategy feedback -->
-      <div class="strategy-feedback" id="strategy-feedback"></div>
+      <!-- Message area — secondaire : résultat financier -->
+      <div class="message-area" id="message-area"></div>
 
     </section>
 
@@ -201,6 +210,8 @@
                data-tooltip="Surrender — Abandonner (50% récupéré).&#10;Si surrender indisponible → Hit."
                data-tp="above-left">R — Surrender</div>
         </div>
+
+        <a class="strategy-credit" href="https://nathangracia.com" target="_blank" rel="noopener">nathangracia.com</a>
       </div>
     </aside>
 

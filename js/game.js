@@ -93,6 +93,13 @@ const Game = (() => {
   let wrongHighlightTimer = null;
 
   // ─────────────────────────────────────────────────────────────
+  //  HISTORY
+  // ─────────────────────────────────────────────────────────────
+  let handHistory        = [];   // last N rounds (newest first)
+  let balanceBeforeRound = 0;    // snapshot taken at deal, used to compute net
+  let hadWrongAction     = false; // true if any wrong decision was made this round
+
+  // ─────────────────────────────────────────────────────────────
   //  SHOE MANAGEMENT
   // ─────────────────────────────────────────────────────────────
 
@@ -250,16 +257,18 @@ const Game = (() => {
 
     enableChips(true);
 
-    // Auto-bet minimum
+    // Auto-bet + auto-deal
     if (autoBet && state.balance >= AUTO_BET_AMOUNT) {
       state.bet = AUTO_BET_AMOUNT;
       updateBetDisplay();
       updateDealButton();
+      setTimeout(dealStart, 600);
     }
   }
 
   // ── DEALING ───────────────────────────────────────────────────
   function enterDealing() {
+    hadWrongAction = false; // reset pour ce tour
     enableChips(false);
     setButtonStates({
       deal: false, hit: false, stand: false,
@@ -479,15 +488,10 @@ const Game = (() => {
     else if (losses.length > 0 && wins.length === 0) msgClass = 'loss';
     else if (pushes.length > 0 && wins.length === 0) msgClass = 'push';
 
-    const single = resultMessages.length === 1;
-    if (single) {
-      const m = resultMessages[0].replace(/^Hand \d+: /, '');
-      setMessage(m, msgClass);
-    } else {
-      setMessage(resultMessages.join(' | '), msgClass);
-    }
-
     updateBalanceDisplay();
+    const _net = state.balance - balanceBeforeRound;
+    setMessage((_net >= 0 ? '+$' : '-$') + Math.abs(_net), msgClass);
+    _addToHistory(_net);
 
     // Return to IDLE after showing result
     setTimeout(() => {
@@ -767,6 +771,7 @@ const Game = (() => {
     if (state.bet <= 0) return;
     if (state.balance < state.bet) return;
 
+    balanceBeforeRound = state.balance;
     state.balance -= state.bet;
     updateBalanceDisplay();
 
@@ -800,6 +805,7 @@ const Game = (() => {
       setStrategyFeedback(`✓ Correct — ${ACTION_LABELS[recommended]}`, 'correct');
       clearWrongHighlight();
     } else {
+      hadWrongAction = true;
       // Re-trigger shake animation even on consecutive wrong moves
       const el = document.getElementById('strategy-feedback');
       if (el) el.classList.remove('wrong');
@@ -1124,6 +1130,59 @@ const Game = (() => {
 
   function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  //  HAND HISTORY
+  // ─────────────────────────────────────────────────────────────
+  const HISTORY_MAX = 4;
+
+  function _addToHistory(net) {
+    // Player summary: one entry per hand (BJ / BUST / SURR / total)
+    const playerParts = state.hands.map(h => {
+      if (h.surrendered) return 'SURR';
+      const { total, isBust } = Strategy.getFullHandTotal(h.cards);
+      if (isBust) return 'BUST';
+      if (_isBlackjack(h.cards) && !h.fromSplit) return 'BJ';
+      return String(total);
+    });
+
+    // Dealer summary
+    const { total: dt, isBust: db } = Strategy.getFullHandTotal(state.dealerCards);
+    const dealerText = db ? 'BUST' : String(dt);
+
+    // Result class
+    // Couleur = qualité des décisions (pas le résultat financier)
+    const decisionClass = hadWrongAction ? 'bad' : 'good';
+
+    handHistory.unshift({ playerText: playerParts.join(' / '), dealerText, decisionClass, net });
+    if (handHistory.length > HISTORY_MAX) handHistory.pop();
+    _renderHistory();
+  }
+
+  function _renderHistory() {
+    const el = document.getElementById('history-list');
+    if (!el) return;
+    el.innerHTML = '';
+    if (handHistory.length === 0) {
+      el.innerHTML = '<div class="history-empty">No hands yet</div>';
+      return;
+    }
+    handHistory.forEach(entry => {
+      const sign    = entry.net > 0 ? '+' : '';
+      const netCls  = entry.net > 0 ? 'pos' : entry.net < 0 ? 'neg' : 'zero';
+      const icon    = entry.decisionClass === 'good' ? '✓' : '✗';
+      const div     = document.createElement('div');
+      div.className = `history-entry h-${entry.decisionClass}`;
+      div.innerHTML = `
+        <div class="h-row">
+          <span class="h-icon">${icon}</span>
+          <span class="h-net h-net-${netCls}">${sign}$${entry.net}</span>
+        </div>
+        <div class="h-totals">${entry.playerText} <span class="h-vs">vs</span> ${entry.dealerText}</div>
+      `;
+      el.appendChild(div);
+    });
   }
 
   // ─────────────────────────────────────────────────────────────
