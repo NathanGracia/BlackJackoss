@@ -98,6 +98,7 @@ const Game = (() => {
   let handHistory        = [];   // last N rounds (newest first)
   let balanceBeforeRound = 0;    // snapshot taken at deal, used to compute net
   let hadWrongAction     = false; // true if any wrong decision was made this round
+  let currentHandActionLog = []; // action log for current round, reset each deal
 
   // ─────────────────────────────────────────────────────────────
   //  SHOE MANAGEMENT
@@ -268,7 +269,8 @@ const Game = (() => {
 
   // ── DEALING ───────────────────────────────────────────────────
   function enterDealing() {
-    hadWrongAction = false; // reset pour ce tour
+    hadWrongAction = false;       // reset pour ce tour
+    currentHandActionLog = [];    // reset action log
     enableChips(false);
     setButtonStates({
       deal: false, hit: false, stand: false,
@@ -801,6 +803,14 @@ const Game = (() => {
       { canDouble, canSplit, canSurrender: isFirstAction && canSurrender, isFirstAction }
     );
 
+    currentHandActionLog.push({
+      handIdx:       state.activeHandIdx,
+      cards:         hand.cards.map(c => ({ rank: c.rank, suit: c.suit })),
+      takenAction:   chosenAction,
+      correctAction: recommended,
+      wasCorrect:    chosenAction === recommended,
+    });
+
     if (chosenAction === recommended) {
       setStrategyFeedback(`✓ Correct — ${ACTION_LABELS[recommended]}`, 'correct');
       clearWrongHighlight();
@@ -1155,9 +1165,80 @@ const Game = (() => {
     // Couleur = qualité des décisions (pas le résultat financier)
     const decisionClass = hadWrongAction ? 'bad' : 'good';
 
-    handHistory.unshift({ playerText: playerParts.join(' / '), dealerText, decisionClass, net });
+    handHistory.unshift({
+      playerText: playerParts.join(' / '), dealerText, decisionClass, net,
+      actions:  [...currentHandActionLog],
+      dealerUp: { rank: state.dealerCards[0].rank, suit: state.dealerCards[0].suit },
+    });
     if (handHistory.length > HISTORY_MAX) handHistory.pop();
     _renderHistory();
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  //  HISTORY DETAIL POPUP
+  // ─────────────────────────────────────────────────────────────
+
+  const ACT_LABEL = { H: 'Hit', S: 'Stand', D: 'Double', P: 'Split', R: 'Surrender' };
+
+  function _ensureDetailPopup() {
+    if (document.getElementById('history-detail')) return;
+    const el = document.createElement('div');
+    el.id = 'history-detail';
+    el.className = 'history-detail';
+    document.body.appendChild(el);
+  }
+
+  function _showDetail(entry, anchorEl) {
+    const popup = document.getElementById('history-detail');
+    if (!popup) return;
+
+    const byHand = {};
+    (entry.actions || []).forEach(a => {
+      (byHand[a.handIdx] = byHand[a.handIdx] || []).push(a);
+    });
+    const handCount = Object.keys(byHand).length;
+
+    let html = `<div class="hd-dealer">Dealer up : ${entry.dealerUp.rank}${entry.dealerUp.suit}</div>`;
+
+    if (!entry.actions || entry.actions.length === 0) {
+      html += `<div class="hd-no-actions">BJ / auto-surrender</div>`;
+    } else {
+      Object.entries(byHand).forEach(([hIdx, actions]) => {
+        if (handCount > 1) html += `<div class="hd-hand-label">Hand ${+hIdx + 1}</div>`;
+        actions.forEach((a, i) => {
+          const cardsStr = a.cards.map(c => c.rank + c.suit).join(' ');
+          const icon = a.wasCorrect ? '✓' : '✗';
+          const cls  = a.wasCorrect ? 'hd-ok' : 'hd-err';
+          html += `<div class="hd-action">
+            <span class="hd-num">${i + 1}.</span>
+            <span class="hd-cards">${cardsStr}</span>
+            <span class="hd-act">${ACT_LABEL[a.takenAction]}</span>
+            <span class="${cls}">${icon}</span>
+            ${!a.wasCorrect ? `<span class="hd-should">→ ${ACT_LABEL[a.correctAction]}</span>` : ''}
+          </div>`;
+        });
+      });
+    }
+
+    popup.innerHTML = html;
+
+    // Positionner à droite de l'entrée, aligné en haut
+    const rect = anchorEl.getBoundingClientRect();
+    let top  = rect.top;
+    let left = rect.right + 8;
+
+    popup.classList.add('visible');
+    // Eviter débordement en bas (recalculer après rendu)
+    const maxTop = window.innerHeight - popup.offsetHeight - 8;
+    if (top > maxTop) top = maxTop;
+
+    popup.style.top  = top + 'px';
+    popup.style.left = left + 'px';
+  }
+
+  function _hideDetail() {
+    const popup = document.getElementById('history-detail');
+    if (popup) popup.classList.remove('visible');
   }
 
   function _renderHistory() {
@@ -1181,6 +1262,8 @@ const Game = (() => {
         </div>
         <div class="h-totals">${entry.playerText} <span class="h-vs">vs</span> ${entry.dealerText}</div>
       `;
+      div.addEventListener('mouseenter', () => _showDetail(entry, div));
+      div.addEventListener('mouseleave', _hideDetail);
       el.appendChild(div);
     });
   }
@@ -1197,6 +1280,7 @@ const Game = (() => {
   function _boot() {
     // Render strategy charts
     Strategy.renderCharts();
+    _ensureDetailPopup();
 
     // Wire up buttons
     document.getElementById('btn-deal')?.addEventListener('click', dealStart);

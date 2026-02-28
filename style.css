@@ -1266,6 +1266,50 @@ body::before {
 }
 .footer a:hover { color: var(--accent); }
 
+/* ── History detail popup ── */
+.history-detail {
+  position: fixed;
+  z-index: 200;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 1rem;
+  min-width: 220px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  font-size: 0.72rem;
+  line-height: 1.6;
+  box-shadow: var(--shadow-lg);
+}
+.history-detail.visible { opacity: 1; }
+
+.hd-dealer {
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+  font-size: 0.65rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.35rem;
+}
+.hd-hand-label {
+  color: var(--accent);
+  font-size: 0.65rem;
+  margin-top: 0.4rem;
+}
+.hd-action {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.hd-num   { color: var(--text-faint); min-width: 1.2rem; }
+.hd-cards { font-family: var(--font-mono); color: var(--text); flex: 1; }
+.hd-act   { font-weight: 600; color: var(--text-dim); }
+.hd-ok    { color: var(--green); }
+.hd-err   { color: var(--red); }
+.hd-should     { color: var(--text-faint); font-size: 0.62rem; }
+.hd-no-actions { color: var(--text-faint); font-style: italic; }
+
 /* ── Utility ── */
 [hidden] { display: none !important; }
 
