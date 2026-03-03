@@ -1,129 +1,574 @@
 /* ═══════════════════════════════════════════════════════════════
-   BlackJackoss — Game Engine (IIFE)
-   Depends on: Strategy (js/strategy.js)
+   BlackJackoss — Client WebSocket + Renderer
+   Depends on: Strategy (js/strategy.js), Config (js/config.js)
    ═══════════════════════════════════════════════════════════════ */
 
 const Game = (() => {
   'use strict';
 
-  // ─────────────────────────────────────────────────────────────
-  //  CONSTANTS
-  // ─────────────────────────────────────────────────────────────
-  const NUM_DECKS     = 6;
-  const TOTAL_CARDS   = NUM_DECKS * 52;
-  const RESHUFFLE_PCT = 0.25; // reshuffle when < 25% remain
-  const SUITS = ['♠','♥','♦','♣'];
-  const RANKS = ['2','3','4','5','6','7','8','9','T','J','Q','K','A'];
+  // ─── local state ──────────────────────────────────────────────
+  let myPseudo    = null;
+  let ws          = null;
+  let lastState   = null;
+  let _timerRafId      = null;
+  let preSelectedAction = null;  // 'hit'|'stand'|'double'|'split'|'surrender'
+  const _prev = { dealer: 0, hands: [] };
 
-  // Hi-Lo count values
-  const HI_LO = {
-    '2':1,'3':1,'4':1,'5':1,'6':1,
-    '7':0,'8':0,'9':0,
-    'T':-1,'J':-1,'Q':-1,'K':-1,'A':-1,
-  };
+  // Client-only state
+  let wrongHighlight     = null;  // { tableType, rowKey }
+  let wrongHighlightTimer= null;
+  let hadWrongAction     = false;
+  let currentHandActionLog = [];
+  let handHistory        = [];
+  const HISTORY_MAX      = 4;
 
-  const SEED_URL = 'https://determinoss.nathangracia.com/seed';
+  // Mode (simple/hard) — client only
+  let gameMode = 'simple';
 
-  // ── sfc32 seeded PRNG ──────────────────────────────────────
-  // 4×uint32 state → float [0, 1)
-  function _makeSfc32(a, b, c, d) {
-    return function () {
-      a |= 0; b |= 0; c |= 0; d |= 0;
-      let t = (a + b | 0) + d | 0;
-      d = d + 1 | 0;
-      a = b ^ b >>> 9;
-      b = c + (c << 3) | 0;
-      c = c << 21 | c >>> 11;
-      c = c + t | 0;
-      return (t >>> 0) / 4294967296;
+  const ACTION_LABELS = { H:'Hit', S:'Stand', D:'Double', P:'Split', R:'Surrender' };
+  const ACT_LABEL     = ACTION_LABELS;
+
+  // ─── WebSocket ────────────────────────────────────────────────
+  function connect() {
+    const url = window.Config?.WS_URL || 'ws://localhost:3000';
+    ws = new WebSocket(url);
+
+    ws.onopen    = () => console.info('[WS] connected');
+    ws.onclose   = () => {
+      console.warn('[WS] disconnected — reconnecting in 2s');
+      setTimeout(connect, 2000);
+    };
+    ws.onerror   = e => console.error('[WS] error', e);
+    ws.onmessage = e => {
+      let msg;
+      try { msg = JSON.parse(e.data); } catch(_) { return; }
+      handleMessage(msg);
     };
   }
 
-  // Derive 4×uint32 from the first 32 hex chars (128 bits) of the seed
-  function _rngFromHex(hex) {
-    return _makeSfc32(
-      parseInt(hex.slice( 0,  8), 16),
-      parseInt(hex.slice( 8, 16), 16),
-      parseInt(hex.slice(16, 24), 16),
-      parseInt(hex.slice(24, 32), 16),
-    );
+  function send(obj) {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
   }
 
-  // FSM phases
-  const PHASE = {
-    IDLE:        'IDLE',
-    DEALING:     'DEALING',
-    INSURANCE:   'INSURANCE',
-    PLAYER_TURN: 'PLAYER_TURN',
-    DEALER_TURN: 'DEALER_TURN',
-    RESOLVING:   'RESOLVING',
-  };
+  // ─── message handler ──────────────────────────────────────────
+  function handleMessage(msg) {
+    if (msg.type === 'welcome') {
+      // Already joined — show table
+      showTable();
+      updateBalanceDisplay(msg.balance);
+    }
 
-  // ─────────────────────────────────────────────────────────────
-  //  STATE
-  // ─────────────────────────────────────────────────────────────
-  let state = {
-    phase:        PHASE.IDLE,
-    shoe:         [],
-    runningCount: 0,
-    balance:      1000,
-    bet:          0,
-    insuranceBet: 0,
+    if (msg.type === 'state') {
+      const prev = lastState;
+      lastState  = msg.state;
+      onState(msg.state, prev);
+    }
 
-    // Hands: array of hand objects
-    // hand = { cards: [], bet: number, doubled: false, isAceSplit: false, done: boolean }
-    hands:        [],
-    activeHandIdx: 0,
-    dealerCards:  [],
+    if (msg.type === 'error') {
+      console.warn('[Server]', msg.message);
+    }
+  }
 
-    splitCount:   0, // how many splits have occurred (max 3)
-  };
+  // ─── join screen ──────────────────────────────────────────────
+  function showJoinScreen() {
+    document.getElementById('join-screen')?.removeAttribute('hidden');
+    document.getElementById('game-wrapper')?.setAttribute('hidden', '');
+  }
 
-  // ─────────────────────────────────────────────────────────────
-  //  MODE (simple | hard)
-  // ─────────────────────────────────────────────────────────────
-  let gameMode  = 'simple'; // 'simple' = no counting, 'hard' = full counting
-  let autoBet   = false;    // auto-place minimum bet ($5) at start of each round
-  const AUTO_BET_AMOUNT = 5;
+  function showTable() {
+    document.getElementById('join-screen')?.setAttribute('hidden', '');
+    document.getElementById('game-wrapper')?.removeAttribute('hidden');
+  }
 
-  // ─────────────────────────────────────────────────────────────
-  //  WRONG-ACTION STATE
-  // ─────────────────────────────────────────────────────────────
-  let wrongHighlight  = null;  // { tableType, rowKey } — persists after a wrong move
-  let wrongHighlightTimer = null;
+  // ─── state renderer ───────────────────────────────────────────
+  function onState(state, prev) {
+    const me = state.players.find(p => p.pseudo === myPseudo);
 
-  // ─────────────────────────────────────────────────────────────
-  //  HISTORY
-  // ─────────────────────────────────────────────────────────────
-  let handHistory        = [];   // last N rounds (newest first)
-  let balanceBeforeRound = 0;    // snapshot taken at deal, used to compute net
-  let hadWrongAction     = false; // true if any wrong decision was made this round
-  let currentHandActionLog = []; // action log for current round, reset each deal
+    // Update seed overlay if present
+    if (state.seedJpeg) _showSeedImage(state.seedJpeg);
 
-  // ─────────────────────────────────────────────────────────────
-  //  SHOE MANAGEMENT
-  // ─────────────────────────────────────────────────────────────
+    // Bet countdown bar
+    updateBetTimer(state);
 
-  // Token chargé depuis .env au runtime (via fetch, fonctionne avec npx serve)
-  let _token = '';
+    // Update shoe bar + count
+    updateShoeBar(state.shoe);
+    updateCountDisplay(state.shoe);
 
-  async function _loadToken() {
-    // 1. token.txt (gitignore, servi normalement par npx serve)
-    try {
-      const res = await fetch('token.txt', { cache: 'no-store' });
-      if (res.ok) {
-        const text = (await res.text()).trim();
-        if (text) { _token = text; console.info('[Config] Token chargé depuis token.txt'); return; }
+    // Render dealer
+    renderDealerHand(state.dealerCards, state.phase);
+
+    // Render all seats (other players + me compact overview)
+    renderSeats(state);
+
+    // Render my hands full-size
+    if (me) {
+      updateBalanceDisplay(me.balance);
+      updateBetDisplay(me.bet, me.hands);
+      renderMyHands(me, state);
+      // Show/hide player-area
+      const pa = document.getElementById('player-area');
+      if (pa) pa.hidden = !me.hands.length;
+    }
+
+    // Detect "just became my turn" → fire pre-selected action
+    _checkPreSelectTrigger(state, prev);
+
+    // Buttons
+    updateButtons(state, me);
+
+    // Strategy feedback — only when it's my turn
+    if (me && state.phase === 'PLAYER_TURN') {
+      const activePseudo = state.players[state.activePlayerIdx]?.pseudo;
+      if (activePseudo === myPseudo) {
+        const hand = me.hands[me.activeHandIdx];
+        if (hand && !hand.done) updateStrategyHighlight(hand, state.dealerCards, me);
       }
-    } catch (_) {}
-    // 2. Fallback : config.js (vide par défaut, ne jamais commit le token dedans)
-    _token = window.Config?.DETERMINOSS_TOKEN || '';
-    if (_token) console.info('[Config] Token chargé depuis config.js');
-    else        console.warn('[Config] Aucun token — frame_jpeg indisponible');
+    }
+
+    // Reset card animation counters on IDLE
+    if (state.phase === 'IDLE') { _prev.dealer = 0; _prev.hands = []; }
+
+    // Detect phase transition → IDLE : reset wrong highlight
+    if (prev && prev.phase !== 'IDLE' && state.phase === 'IDLE') {
+      clearWrongHighlight();
+      setStrategyFeedback('', '');
+      Strategy.clearHighlights();
+      // Add to history if we were playing
+      if (prev.phase === 'RESOLVING' && me) {
+        _addToHistory(state, prev, me);
+      }
+    }
+
+    // Message area
+    updateMessageArea(state, me, prev);
   }
 
-  function _seedUrl() {
-    return _token ? `${SEED_URL}?token=${encodeURIComponent(_token)}` : SEED_URL;
+  // ─── dealer rendering ─────────────────────────────────────────
+  function renderDealerHand(cards, phase) {
+    const container = document.getElementById('dealer-cards');
+    if (!container) return;
+    container.innerHTML = '';
+    cards.forEach((card, i) => {
+      const el = createCardElement(card);
+      if (i >= _prev.dealer) el.classList.add('card-enter');
+      container.appendChild(el);
+    });
+    _prev.dealer = cards.length;
+
+    const revealed = phase === 'DEALER_TURN' || phase === 'RESOLVING' || phase === 'IDLE';
+    const scoreEl  = document.getElementById('dealer-score');
+    if (!scoreEl) return;
+
+    if (!cards.length) { scoreEl.textContent = '—'; return; }
+
+    if (revealed) {
+      let total = 0, aces = 0;
+      cards.forEach(c => {
+        const v = _cardValue(c); total += v;
+        if (c.rank === 'A') aces++;
+      });
+      while (total > 21 && aces > 0) { total -= 10; aces--; }
+      scoreEl.textContent = total > 21 ? `${total} BUST` : String(total);
+    } else {
+      const vis = cards.filter(c => !c.faceDown);
+      if (!vis.length) { scoreEl.textContent = '—'; return; }
+      let total = 0, aces = 0;
+      vis.forEach(c => { const v = _cardValue(c); total += v; if (c.rank==='A') aces++; });
+      while (total > 21 && aces > 0) { total -= 10; aces--; }
+      scoreEl.textContent = total + ' +?';
+    }
+  }
+
+  // ─── my hands ─────────────────────────────────────────────────
+  function renderMyHands(me, state) {
+    const container = document.getElementById('hands-container');
+    if (!container) return;
+    container.innerHTML = '';
+    if (!me.hands.length) return;
+
+    const compact  = me.hands.length >= 3;
+    const isMyTurn = state.phase === 'PLAYER_TURN' && state.players[state.activePlayerIdx]?.pseudo === myPseudo;
+
+    me.hands.forEach((hand, idx) => {
+      const active = isMyTurn && idx === me.activeHandIdx && !hand.done;
+      const box    = document.createElement('div');
+      box.className = 'hand-box' + (active ? ' active-hand' : '');
+
+      const row = document.createElement('div');
+      row.className = 'cards-row';
+      const prevCount = _prev.hands[idx] || 0;
+      hand.cards.forEach((c, ci) => {
+        const el = createCardElement(c, compact);
+        if (ci >= prevCount) el.classList.add('card-enter');
+        row.appendChild(el);
+      });
+      _prev.hands[idx] = hand.cards.length;
+      box.appendChild(row);
+
+      const { total, isBust } = Strategy.getHandTotal(hand.cards);
+      const scoreEl = document.createElement('div');
+      scoreEl.className = 'hand-score' + (isBust ? ' bust' : '');
+      let scoreText = String(total);
+      if (isBust) scoreText += ' BUST';
+      if (hand.doubled) scoreText += ' ×2';
+      if (hand.surrendered) scoreText = 'Surrender';
+      if (_isBlackjack(hand.cards) && !hand.fromSplit) scoreText = 'BJ';
+      scoreEl.textContent = scoreText;
+      box.appendChild(scoreEl);
+
+      if (me.hands.length > 1) {
+        const lbl = document.createElement('div');
+        lbl.className = 'hand-label';
+        lbl.textContent = `HAND ${idx+1}  $${hand.bet}`;
+        box.appendChild(lbl);
+      }
+      container.appendChild(box);
+    });
+  }
+
+  // ─── table seats (all players) ────────────────────────────────
+  function renderSeats(state) {
+    const container = document.getElementById('table-seats');
+    if (!container) return;
+    container.innerHTML = '';
+
+    const activePseudo = state.players[state.activePlayerIdx]?.pseudo;
+    const sorted = [...state.players].sort((a, b) => a.seatIndex - b.seatIndex);
+
+    sorted.forEach(p => {
+      const isMe     = p.pseudo === myPseudo;
+      const isActive = p.pseudo === activePseudo && state.phase === 'PLAYER_TURN';
+
+      const seat = document.createElement('div');
+      seat.className = ['seat', isMe ? 'my-seat' : '', isActive ? 'active-seat' : '',
+                        !p.connected ? 'disconnected' : ''].filter(Boolean).join(' ');
+
+      // Name row
+      const nameRow = document.createElement('div');
+      nameRow.className = 'seat-name-row';
+      if (isActive) {
+        const dot = document.createElement('span');
+        dot.className = 'seat-active-dot'; dot.textContent = '▶';
+        nameRow.appendChild(dot);
+      }
+      const nameEl = document.createElement('span');
+      nameEl.className = 'seat-name';
+      nameEl.textContent = p.pseudo + (isMe ? ' ★' : '');
+      nameRow.appendChild(nameEl);
+      seat.appendChild(nameRow);
+
+      // Cards
+      if (p.hands.length) {
+        p.hands.forEach(hand => {
+          const row = document.createElement('div');
+          row.className = 'cards-row';
+          hand.cards.forEach(c => row.appendChild(createCardElement(c, true)));
+          seat.appendChild(row);
+          const { total, isBust } = Strategy.getHandTotal(hand.cards);
+          const sc = document.createElement('div');
+          sc.className = 'seat-score' + (isBust ? ' bust' : '');
+          sc.textContent = hand.surrendered ? 'SURR' :
+                           (_isBlackjack(hand.cards) && !hand.fromSplit) ? 'BJ' :
+                           isBust ? total + ' B' : String(total);
+          seat.appendChild(sc);
+        });
+      } else {
+        const w = document.createElement('div');
+        w.className = 'seat-waiting';
+        w.textContent = state.phase === 'IDLE' ? (p.bet > 0 ? `$${p.bet} ✓` : '—') : 'out';
+        seat.appendChild(w);
+      }
+
+      // Info: balance + bet
+      const info = document.createElement('div');
+      info.className = 'seat-info';
+      info.innerHTML = `<span class="seat-balance">$${p.balance}</span>`;
+      if (p.bet > 0 && !p.hands.length) info.innerHTML += `<span class="seat-bet"> $${p.bet}</span>`;
+      seat.appendChild(info);
+
+      container.appendChild(seat);
+    });
+  }
+
+  // ─── pre-select ───────────────────────────────────────────────
+  function _checkPreSelectTrigger(state, prev) {
+    if (!myPseudo || !preSelectedAction) return;
+    const nowMyTurn = state.phase === 'PLAYER_TURN' &&
+                      state.players[state.activePlayerIdx]?.pseudo === myPseudo;
+    const wasMyTurn = prev?.phase === 'PLAYER_TURN' &&
+                      prev?.players?.[prev?.activePlayerIdx]?.pseudo === myPseudo;
+    if (nowMyTurn && !wasMyTurn) {
+      const action = preSelectedAction;
+      _setPreSelect(null);
+      setTimeout(() => send({ type: 'action', action }), 150);
+    }
+  }
+
+  function _setPreSelect(action) {
+    preSelectedAction = action;
+    const hint  = document.getElementById('preselect-hint');
+    const label = document.getElementById('preselect-label');
+    document.querySelectorAll('.action-btn').forEach(b => b.classList.remove('preselected'));
+    if (!action) { if (hint) hint.hidden = true; return; }
+    const names = { hit:'Hit', stand:'Stand', double:'Double', split:'Split', surrender:'Surrender' };
+    if (label) label.textContent = `⏳ ${names[action]} préselectionné`;
+    if (hint)  hint.hidden = false;
+    const idMap = { hit:'btn-hit', stand:'btn-stand', double:'btn-double', split:'btn-split', surrender:'btn-surrender' };
+    document.getElementById(idMap[action])?.classList.add('preselected');
+  }
+
+  // ─── buttons ──────────────────────────────────────────────────
+  function updateButtons(state, me) {
+    const phase      = state.phase;
+    const isMyTurn   = phase === 'PLAYER_TURN' && me &&
+                       state.players[state.activePlayerIdx]?.pseudo === myPseudo;
+    const isOtherTurn = phase === 'PLAYER_TURN' && !isMyTurn;
+    const isIdle     = phase === 'IDLE';
+    const isIns      = phase === 'INSURANCE' && me && me.hands.length > 0 && !me._insuranceDecided;
+
+    document.querySelectorAll('.chip').forEach(btn => {
+      if (btn.id === 'btn-auto-bet') return;
+      btn.disabled = !isIdle || !me;
+    });
+
+    const btnIns   = document.getElementById('btn-insurance');
+    const btnNoIns = document.getElementById('btn-no-insurance');
+    if (btnIns)   { btnIns.hidden   = !isIns; btnIns.disabled   = !isIns; }
+    if (btnNoIns) { btnNoIns.hidden = !isIns; btnNoIns.disabled = !isIns; }
+
+    // During other player's turn → enable buttons for pre-select (except already done constraints)
+    if (isOtherTurn && me?.hands.length) {
+      _setBtn('btn-hit',       false);
+      _setBtn('btn-stand',     false);
+      _setBtn('btn-double',    false);
+      _setBtn('btn-split',     false);
+      _setBtn('btn-surrender', false);
+      return;
+    }
+
+    let canHit=false, canStand=false, canDouble=false, canSplit=false, canSurrender=false;
+    if (isMyTurn && me) {
+      const hand = me.hands[me.activeHandIdx];
+      if (hand && !hand.done) {
+        const { total } = Strategy.getHandTotal(hand.cards);
+        canHit       = total < 21 && !hand.isAceSplit;
+        canStand     = true;
+        canDouble    = hand.cards.length === 2 && me.balance >= hand.bet;
+        canSplit     = hand.cards.length === 2 &&
+                       _cardValue(hand.cards[0]) === _cardValue(hand.cards[1]) &&
+                       me.splitCount < 3 && me.balance >= hand.bet &&
+                       !(hand.isAceSplit || (_cardValue(hand.cards[0])===11 && hand.fromSplit));
+        canSurrender = hand.cards.length === 2 && !hand.fromSplit && me.hands.length === 1;
+      }
+    }
+
+    _setBtn('btn-hit',       !isMyTurn || !canHit);
+    _setBtn('btn-stand',     !isMyTurn || !canStand);
+    _setBtn('btn-double',    !isMyTurn || !canDouble);
+    _setBtn('btn-split',     !isMyTurn || !canSplit);
+    _setBtn('btn-surrender', !isMyTurn || !canSurrender);
+  }
+
+  function _setBtn(id, disabled) {
+    const el = document.getElementById(id);
+    if (el) el.disabled = disabled;
+  }
+
+  // ─── message area ─────────────────────────────────────────────
+  function updateMessageArea(state, me, prev) {
+    const el = document.getElementById('message-area');
+    if (!el) return;
+
+    if (state.phase === 'IDLE' && prev && prev.phase === 'RESOLVING') {
+      // Show payout result
+      if (!me) { el.textContent = ''; el.className = 'message-area'; return; }
+      // Calculate net for this round from previous resolving state
+      const prevMe = prev.players?.find(p => p.pseudo === myPseudo);
+      if (prevMe) {
+        const net = me.balance - prevMe.balance;
+        el.textContent = (net >= 0 ? '+$' : '-$') + Math.abs(net);
+        el.className = 'message-area ' + (net > 0 ? 'win' : net < 0 ? 'loss' : 'push');
+      }
+      return;
+    }
+
+    if (state.phase === 'IDLE') {
+      el.textContent = prev?.phase === 'IDLE' ? 'Place your bet and deal.' : '';
+      el.className   = 'message-area';
+    } else if (state.phase === 'INSURANCE') {
+      el.textContent = 'Dealer shows Ace — Insurance?';
+      el.className   = 'message-area info';
+    } else if (state.phase === 'DEALING') {
+      el.textContent = '';
+      el.className   = 'message-area';
+    } else if (state.phase === 'DEALER_TURN') {
+      el.textContent = 'Dealer plays…';
+      el.className   = 'message-area info';
+    }
+  }
+
+  // ─── strategy highlight ───────────────────────────────────────
+  function updateStrategyHighlight(hand, dealerCards, me) {
+    if (wrongHighlight) {
+      Strategy.highlightRow(wrongHighlight.tableType, wrongHighlight.rowKey);
+      return;
+    }
+    if (!dealerCards.length) return;
+    const dealerUpcard = _cardValue(dealerCards[0]);
+    const { canDouble, canSplit, canSurrender } = _getAvail(hand, me);
+    const isFirst = hand.cards.length === 2 && !hand.fromSplit;
+    const { tableType, rowKey } = Strategy.getAction(hand.cards, dealerUpcard,
+      { canDouble, canSplit, canSurrender: isFirst && canSurrender, isFirstAction: isFirst });
+    Strategy.highlightRow(tableType, rowKey);
+  }
+
+  function checkActionFeedback(chosenAction, hand, dealerCards, me) {
+    const dealerUpcard = _cardValue(dealerCards[0]);
+    const { canDouble, canSplit, canSurrender } = _getAvail(hand, me);
+    const isFirst = hand.cards.length === 2 && !hand.fromSplit;
+    const { action: rec, tableType, rowKey } = Strategy.getAction(hand.cards, dealerUpcard,
+      { canDouble, canSplit, canSurrender: isFirst && canSurrender, isFirstAction: isFirst });
+
+    currentHandActionLog.push({
+      handIdx: me.activeHandIdx,
+      cards: hand.cards.map(c => ({ rank: c.rank, suit: c.suit })),
+      takenAction: chosenAction, correctAction: rec, wasCorrect: chosenAction === rec,
+    });
+
+    if (chosenAction === rec) {
+      setStrategyFeedback(`✓ Correct — ${ACTION_LABELS[rec]}`, 'correct');
+      clearWrongHighlight();
+    } else {
+      hadWrongAction = true;
+      const el = document.getElementById('strategy-feedback');
+      if (el) el.classList.remove('wrong');
+      requestAnimationFrame(() =>
+        setStrategyFeedback(`✗ Mauvaise déc. ! Il fallait : ${ACTION_LABELS[rec]}`, 'wrong')
+      );
+      clearTimeout(wrongHighlightTimer);
+      wrongHighlight = { tableType, rowKey };
+      wrongHighlightTimer = setTimeout(clearWrongHighlight, 5000);
+    }
+  }
+
+  function clearWrongHighlight() {
+    wrongHighlight = null;
+    clearTimeout(wrongHighlightTimer);
+  }
+
+  function _getAvail(hand, me) {
+    const { total } = Strategy.getHandTotal(hand.cards);
+    return {
+      canDouble:    hand.cards.length === 2 && me.balance >= hand.bet,
+      canSplit:     hand.cards.length === 2 &&
+                    _cardValue(hand.cards[0]) === _cardValue(hand.cards[1]) &&
+                    me.splitCount < 3 && me.balance >= hand.bet,
+      canSurrender: hand.cards.length === 2 && !hand.fromSplit && me.hands.length === 1,
+    };
+  }
+
+  // ─── card rendering ───────────────────────────────────────────
+  function createCardElement(card, compact = false) {
+    const div = document.createElement('div');
+    div.className = 'card' + (compact ? ' compact' : '');
+    if (card.faceDown) {
+      div.innerHTML = `<div class="card-face-down"></div>`;
+      return div;
+    }
+    const sClass = (card.suit === '♥' || card.suit === '♦') ? 'suit-red' : 'suit-black';
+    div.innerHTML = `
+      <div class="card-front">
+        <div class="card-corner ${sClass}">
+          <span class="corner-rank">${card.rank}</span>
+          <span class="corner-suit">${card.suit}</span>
+        </div>
+        <span class="card-suit-big ${sClass}">${card.suit}</span>
+        <div class="card-corner bottom-right ${sClass}">
+          <span class="corner-rank">${card.rank}</span>
+          <span class="corner-suit">${card.suit}</span>
+        </div>
+      </div>`;
+    return div;
+  }
+
+  // ─── display helpers ──────────────────────────────────────────
+  function updateBalanceDisplay(balance) {
+    const el = document.getElementById('balance-display');
+    if (el && balance !== undefined) el.textContent = '$' + balance;
+  }
+
+  function updateBetDisplay(bet, hands) {
+    const el = document.getElementById('bet-display');
+    if (!el) return;
+    if (hands && hands.length > 0) {
+      const total = hands.reduce((s, h) => s + h.bet, 0);
+      el.textContent = '$' + total;
+    } else {
+      el.textContent = '$' + (bet || 0);
+    }
+  }
+
+  function updateShoeBar(shoe) {
+    const fill = document.getElementById('shoe-fill');
+    if (!fill || !shoe) return;
+    const pct = (shoe.remaining / (6 * 52)) * 100;
+    fill.style.width = pct + '%';
+  }
+
+  function updateCountDisplay(shoe) {
+    if (!shoe) return;
+    const rc    = shoe.runningCount;
+    const decks = shoe.remaining / 52;
+    const tc    = decks > 0 ? rc / decks : 0;
+
+    const rcEl    = document.getElementById('rc-value');
+    const tcEl    = document.getElementById('tc-value');
+    const decksEl = document.getElementById('decks-value');
+    if (rcEl) { rcEl.textContent = rc > 0 ? '+'+rc : String(rc); rcEl.className = 'stat-value '+(rc>0?'positive':rc<0?'negative':'neutral'); }
+    if (tcEl) { tcEl.textContent = (tc>0?'+':'')+tc.toFixed(1); tcEl.className = 'stat-value '+(tc>0?'positive':tc<0?'negative':'neutral'); }
+    if (decksEl) decksEl.textContent = decks.toFixed(1);
+  }
+
+  function setStrategyFeedback(text, type) {
+    const el = document.getElementById('strategy-feedback');
+    if (el) { el.textContent = text; el.className = 'strategy-feedback ' + (type||''); }
+  }
+
+  // ─── bet countdown bar ────────────────────────────────────────
+  function updateBetTimer(state) {
+    const wrap  = document.getElementById('bet-timer-wrap');
+    const bar   = document.getElementById('bet-timer-bar');
+    const label = document.getElementById('bet-timer-label');
+    if (!wrap || !bar || !label) return;
+
+    cancelAnimationFrame(_timerRafId);
+
+    if (state.phase !== 'IDLE' || !state.betDeadline) {
+      wrap.hidden = true;
+      return;
+    }
+
+    wrap.hidden = false;
+
+    const total    = 8000; // must match BET_WINDOW_MS
+    const deadline = state.betDeadline;
+
+    function tick() {
+      const remaining = Math.max(0, deadline - Date.now());
+      const pct       = remaining / total;
+      bar.style.width = (pct * 100) + '%';
+      label.textContent = Math.ceil(remaining / 1000) + 's';
+
+      // Color urgency
+      const urgency = pct < 0.25 ? 'critical' : pct < 0.5 ? 'urgent' : '';
+      bar.className   = 'bet-timer-bar ' + urgency;
+      label.className = 'bet-timer-label ' + urgency;
+
+      if (remaining > 0) _timerRafId = requestAnimationFrame(tick);
+      else { bar.style.width = '0%'; label.textContent = '0s'; }
+    }
+
+    tick();
   }
 
   function _showSeedImage(base64) {
@@ -136,1199 +581,209 @@ const Game = (() => {
     _showSeedImage._timer = setTimeout(() => overlay.classList.remove('visible'), 2800);
   }
 
-  async function initShoe() {
-    // Fetch a deterministic seed from the server
-    let rng = Math.random;
-    try {
-      const res = await fetch(_seedUrl(), { cache: 'no-store' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      rng = _rngFromHex(json.seed);
-      console.info(`[Shoe] seed ${json.seed.slice(0, 16)}… (age ${json.age_ms} ms)`);
-      if (json.frame_jpeg) _showSeedImage(json.frame_jpeg);
-    } catch (e) {
-      console.warn('[Shoe] Seed fetch failed — using Math.random:', e.message);
-    }
-
-    // Build 6-deck shoe
-    const shoe = [];
-    for (let d = 0; d < NUM_DECKS; d++) {
-      for (const suit of SUITS) {
-        for (const rank of RANKS) {
-          shoe.push({ rank, suit });
-        }
-      }
-    }
-    // Fisher-Yates with seeded RNG
-    for (let i = shoe.length - 1; i > 0; i--) {
-      const j = Math.floor(rng() * (i + 1));
-      [shoe[i], shoe[j]] = [shoe[j], shoe[i]];
-    }
-    state.shoe = shoe;
-    state.runningCount = 0;
-    updateCountDisplay();
-    updateShoeBar();
-  }
-
-  function needsReshuffle() {
-    return state.shoe.length < TOTAL_CARDS * RESHUFFLE_PCT;
-  }
-
-  /**
-   * Deal a card from the shoe.
-   * @param {boolean} faceDown — whether card is dealt face-down
-   * @returns card object (or null if shoe empty)
-   */
-  function dealCard(faceDown = false) {
-    if (state.shoe.length === 0) return null;
-    const card = { ...state.shoe.pop(), faceDown };
-    if (!faceDown) {
-      state.runningCount += HI_LO[card.rank];
-    }
-    updateCountDisplay();
-    updateShoeBar();
-    return card;
-  }
-
-  /**
-   * Reveal a face-down card (dealer hole card).
-   */
-  function revealCard(card) {
-    if (!card || !card.faceDown) return;
-    card.faceDown = false;
-    state.runningCount += HI_LO[card.rank];
-    updateCountDisplay();
-  }
-
-  function getTrueCount() {
-    const decksRemaining = state.shoe.length / 52;
-    if (decksRemaining <= 0) return 0;
-    return state.runningCount / decksRemaining;
-  }
-
-  function getDecksRemaining() {
-    return state.shoe.length / 52;
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  FSM
-  // ─────────────────────────────────────────────────────────────
-
-  function transitionTo(phase) {
-    state.phase = phase;
-    switch (phase) {
-      case PHASE.IDLE:        enterIdle();        break;
-      case PHASE.DEALING:     enterDealing();     break;
-      case PHASE.INSURANCE:   enterInsurance();   break;
-      case PHASE.PLAYER_TURN: enterPlayerTurn();  break;
-      case PHASE.DEALER_TURN: enterDealerTurn();  break;
-      case PHASE.RESOLVING:   enterResolving();   break;
-    }
-  }
-
-  // ── IDLE ──────────────────────────────────────────────────────
-  async function enterIdle() {
-    clearHands();
-    state.bet = 0;
-    state.insuranceBet = 0;
-    state.splitCount = 0;
-    updateBetDisplay();
-    updateBalanceDisplay();
-    setDealerScore('—');
-    Strategy.clearHighlights();
-    clearWrongHighlight();
-    setStrategyFeedback('', '');
-    updateCountDisplay();
-
-    // Disable everything until shoe is confirmed ready
-    enableChips(false);
-    setButtonStates({
-      deal: false, hit: false, stand: false,
-      double: false, split: false, surrender: false,
-      insurance: false, noIns: false,
-    });
-
-    if (needsReshuffle()) {
-      setMessage('🎲 Fetching seed…', 'info');
-      await initShoe();
-      setMessage('♻ New shoe — place your bet.', 'info');
-    } else {
-      setMessage('Place your bet and deal.', '');
-    }
-
-    enableChips(true);
-
-    // Auto-bet + auto-deal
-    if (autoBet && state.balance >= AUTO_BET_AMOUNT) {
-      state.bet = AUTO_BET_AMOUNT;
-      updateBetDisplay();
-      updateDealButton();
-      setTimeout(dealStart, 600);
-    }
-  }
-
-  // ── DEALING ───────────────────────────────────────────────────
-  function enterDealing() {
-    hadWrongAction = false;       // reset pour ce tour
-    currentHandActionLog = [];    // reset action log
-    enableChips(false);
-    setButtonStates({
-      deal: false, hit: false, stand: false,
-      double: false, split: false, surrender: false,
-      insurance: false, noIns: false,
-    });
-
-    // Init hands
-    state.hands = [{
-      cards:    [],
-      bet:      state.bet,
-      doubled:  false,
-      isAceSplit: false,
-      done:     false,
-    }];
-    state.dealerCards = [];
-    state.activeHandIdx = 0;
-
-    clearHands();
-    setMessage('');
-
-    // Deal sequence: Player, Dealer, Player, Dealer(faceDown)
-    const dealSequence = async () => {
-      const p1 = dealCard();
-      state.hands[0].cards.push(p1);
-      renderAllHands();
-      await delay(250);
-
-      const d1 = dealCard();
-      state.dealerCards.push(d1);
-      renderDealerHand();
-      await delay(250);
-
-      const p2 = dealCard();
-      state.hands[0].cards.push(p2);
-      renderAllHands();
-      await delay(250);
-
-      const d2 = dealCard(true); // hole card — face down
-      state.dealerCards.push(d2);
-      renderDealerHand();
-      await delay(200);
-
-      // Check for dealer Ace — offer insurance (regardless of player BJ)
-      if (d1.rank === 'A') {
-        transitionTo(PHASE.INSURANCE);
-        return;
-      }
-
-      // Check for player blackjack (no dealer Ace)
-      if (_isBlackjack(state.hands[0].cards)) {
-        // Dealer peek for BJ (checks hole card regardless of face-down)
-        const dealerHasBlackjack = _dealerHasBlackjack();
-        revealCard(state.dealerCards[1]);
-        renderDealerHand(true);
-        if (dealerHasBlackjack) {
-          setMessage('PUSH — Both Blackjack!', 'push');
-        } else {
-          setMessage('BLACKJACK! 🃏 3:2', 'bj');
-        }
-        transitionTo(PHASE.RESOLVING);
-        return;
-      }
-
-      transitionTo(PHASE.PLAYER_TURN);
-    };
-
-    dealSequence().catch(console.error);
-  }
-
-  // ── INSURANCE ─────────────────────────────────────────────────
-  function enterInsurance() {
-    setMessage('Dealer shows Ace — Insurance?', 'info');
-    setButtonStates({
-      deal: false, hit: false, stand: false,
-      double: false, split: false, surrender: false,
-      insurance: true, noIns: true,
-    });
-  }
-
-  // ── PLAYER TURN ───────────────────────────────────────────────
-  function enterPlayerTurn() {
-    clearWrongHighlight();
-    setStrategyFeedback('', '');
-    setMessage('');
-    updateAvailableActions();
-    updateStrategyHighlight();
-  }
-
-  // ── DEALER TURN ───────────────────────────────────────────────
-  function enterDealerTurn() {
-    setButtonStates({
-      deal: false, hit: false, stand: false,
-      double: false, split: false, surrender: false,
-      insurance: false, noIns: false,
-    });
-    Strategy.clearHighlights();
-
-    const dealerPlay = async () => {
-      // Reveal hole card with animation
-      const holeCard = state.dealerCards[1];
-      revealCard(holeCard);
-      renderDealerHand(true);
-      await delay(400);
-
-      // Dealer hits on soft 16 or less, hard 16 or less, soft 17 hits or less
-      // S17 = dealer stands on soft 17
-      let { total, isSoft } = Strategy.getFullHandTotal(state.dealerCards);
-      while (total < 17 || (total === 17 && false /* S17: never hit soft 17 */)) {
-        const card = dealCard();
-        state.dealerCards.push(card);
-        renderDealerHand(true);
-        await delay(350);
-        const result = Strategy.getFullHandTotal(state.dealerCards);
-        total = result.total;
-        isSoft = result.isSoft;
-      }
-
-      // S17: dealer stands on HARD 17 or more, and on SOFT 17 or more
-      // Dealer must hit soft 16 and below — which the loop above handles.
-      // Actually per S17 rule: dealer stands on soft 17.
-      // The loop condition is: hit if total < 17. Perfect for S17.
-
-      setDealerScore(String(total) + (total > 21 ? ' BUST' : ''));
-      transitionTo(PHASE.RESOLVING);
-    };
-
-    dealerPlay().catch(console.error);
-  }
-
-  // ── RESOLVING ─────────────────────────────────────────────────
-  function enterResolving() {
-    setButtonStates({
-      deal: false, hit: false, stand: false,
-      double: false, split: false, surrender: false,
-      insurance: false, noIns: false,
-    });
-
-    const { total: dealerTotal } = Strategy.getFullHandTotal(state.dealerCards);
-    const dealerBust = dealerTotal > 21;
-    const dealerBJ   = _dealerHasBlackjack();
-
-    let resultMessages = [];
-
-    // Resolve insurance bet first
-    if (state.insuranceBet > 0) {
-      if (dealerBJ) {
-        const win = state.insuranceBet * 2;
-        state.balance += win;
-        resultMessages.push(`Insurance +$${win}`);
-      } else {
-        resultMessages.push(`Insurance -$${state.insuranceBet}`);
-      }
-    }
-
-    // Resolve each hand
-    state.hands.forEach((hand, idx) => {
-      if (hand.surrendered) {
-        // Already handled
-        state.balance += Math.floor(hand.bet / 2);
-        resultMessages.push(`Hand ${idx+1}: Surrender (-$${Math.ceil(hand.bet/2)})`);
-        return;
-      }
-
-      const { total: playerTotal } = Strategy.getFullHandTotal(hand.cards);
-      const playerBust = playerTotal > 21;
-      const playerBJ   = _isBlackjack(hand.cards) && state.hands.length === 1 && !hand.fromSplit;
-
-      if (playerBust) {
-        resultMessages.push(`Hand ${idx+1}: BUST -$${hand.bet}`);
-        return;
-      }
-
-      if (playerBJ && !dealerBJ) {
-        // Blackjack pays 3:2
-        const payout = Math.floor(hand.bet * 1.5);
-        state.balance += hand.bet + payout;
-        resultMessages.push(`Hand ${idx+1}: BLACKJACK +$${payout}`);
-        return;
-      }
-
-      if (playerBJ && dealerBJ) {
-        state.balance += hand.bet; // push
-        resultMessages.push(`Hand ${idx+1}: PUSH (both BJ)`);
-        return;
-      }
-
-      if (dealerBJ) {
-        resultMessages.push(`Hand ${idx+1}: LOSE -$${hand.bet}`);
-        return;
-      }
-
-      if (dealerBust) {
-        state.balance += hand.bet * 2;
-        resultMessages.push(`Hand ${idx+1}: WIN +$${hand.bet}`);
-        return;
-      }
-
-      if (playerTotal > dealerTotal) {
-        state.balance += hand.bet * 2;
-        resultMessages.push(`Hand ${idx+1}: WIN +$${hand.bet}`);
-      } else if (playerTotal === dealerTotal) {
-        state.balance += hand.bet; // push
-        resultMessages.push(`Hand ${idx+1}: PUSH`);
-      } else {
-        resultMessages.push(`Hand ${idx+1}: LOSE -$${hand.bet}`);
-      }
-    });
-
-    // Determine overall message
-    const wins    = resultMessages.filter(m => m.includes('WIN') || m.includes('BLACKJACK'));
-    const losses  = resultMessages.filter(m => m.includes('LOSE') || m.includes('BUST') || m.includes('Surrender'));
-    const pushes  = resultMessages.filter(m => m.includes('PUSH'));
-
-    let msgClass = 'info';
-    if (wins.length > 0 && losses.length === 0) msgClass = 'win';
-    else if (losses.length > 0 && wins.length === 0) msgClass = 'loss';
-    else if (pushes.length > 0 && wins.length === 0) msgClass = 'push';
-
-    updateBalanceDisplay();
-    const _net = state.balance - balanceBeforeRound;
-    setMessage((_net >= 0 ? '+$' : '-$') + Math.abs(_net), msgClass);
-    _addToHistory(_net);
-
-    // Return to IDLE after showing result
-    setTimeout(() => {
-      transitionTo(PHASE.IDLE);
-    }, 1800);
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  PLAYER ACTIONS
-  // ─────────────────────────────────────────────────────────────
-
-  function actionHit() {
-    if (state.phase !== PHASE.PLAYER_TURN) return;
-    checkAction('H');
-    const hand = state.hands[state.activeHandIdx];
-    const card = dealCard();
-    hand.cards.push(card);
-    renderAllHands();
-
-    const { total, isBust } = Strategy.getHandTotal(hand.cards);
-
-    if (isBust) {
-      hand.done = true;
-      setHandScore(state.activeHandIdx, total + ' BUST', true);
-      setMessage(`Bust! (${total})`, 'loss');
-      advanceHand();
-    } else if (total === 21) {
-      hand.done = true;
-      setHandScore(state.activeHandIdx, '21');
-      advanceHand();
-    } else {
-      updateAvailableActions();
-      updateStrategyHighlight();
-    }
-  }
-
-  function actionStand() {
-    if (state.phase !== PHASE.PLAYER_TURN) return;
-    checkAction('S');
-    state.hands[state.activeHandIdx].done = true;
-    advanceHand();
-  }
-
-  function actionDouble() {
-    if (state.phase !== PHASE.PLAYER_TURN) return;
-    checkAction('D');
-    const hand = state.hands[state.activeHandIdx];
-    const extraBet = hand.bet;
-    if (state.balance < extraBet) return;
-
-    state.balance -= extraBet;
-    hand.bet += extraBet;
-    hand.doubled = true;
-    updateBalanceDisplay();
-    updateBetDisplay();
-
-    const card = dealCard();
-    hand.cards.push(card);
-    renderAllHands();
-
-    hand.done = true;
-    const { total, isBust } = Strategy.getHandTotal(hand.cards);
-    if (isBust) setHandScore(state.activeHandIdx, total + ' BUST', true);
-    advanceHand();
-  }
-
-  function actionSplit() {
-    if (state.phase !== PHASE.PLAYER_TURN) return;
-    checkAction('P');
-    const hand = state.hands[state.activeHandIdx];
-
-    // Validate: exactly 2 cards, same value
-    if (hand.cards.length !== 2) return;
-    const v1 = Strategy.cardValue(hand.cards[0]);
-    const v2 = Strategy.cardValue(hand.cards[1]);
-    if (v1 !== v2) return;
-    if (state.balance < hand.bet) return;
-
-    state.balance -= hand.bet;
-    state.splitCount++;
-    updateBalanceDisplay();
-
-    const isAceSplit = v1 === 11;
-
-    // Create two new hands
-    const card1 = hand.cards[0];
-    const card2 = hand.cards[1];
-
-    const newHand1 = {
-      cards:      [card1],
-      bet:        hand.bet,
-      doubled:    false,
-      isAceSplit: isAceSplit,
-      fromSplit:  true,
-      done:       false,
-    };
-    const newHand2 = {
-      cards:      [card2],
-      bet:        hand.bet,
-      doubled:    false,
-      isAceSplit: isAceSplit,
-      fromSplit:  true,
-      done:       false,
-    };
-
-    // Replace current hand with two new ones
-    state.hands.splice(state.activeHandIdx, 1, newHand1, newHand2);
-
-    // Deal one card to each new hand
-    newHand1.cards.push(dealCard());
-    newHand2.cards.push(dealCard());
-
-    // Ace split: auto-stand each hand (one card only, no re-split)
-    if (isAceSplit) {
-      newHand1.done = true;
-      newHand2.done = true;
-      renderAllHands();
-      advanceHand();
-      return;
-    }
-
-    renderAllHands();
-    updateAvailableActions();
-    updateStrategyHighlight();
-  }
-
-  function actionSurrender() {
-    if (state.phase !== PHASE.PLAYER_TURN) return;
-    checkAction('R');
-    const hand = state.hands[state.activeHandIdx];
-    hand.surrendered = true;
-    hand.done = true;
-    setMessage(`Surrendered — lose $${Math.ceil(hand.bet/2)}`, 'loss');
-    advanceHand();
-  }
-
-  function actionInsurance() {
-    if (state.phase !== PHASE.INSURANCE) return;
-    const maxIns = Math.floor(state.bet / 2);
-    if (state.balance < maxIns) return;
-    state.insuranceBet = maxIns;
-    state.balance -= maxIns;
-    updateBalanceDisplay();
-    _afterInsurance();
-  }
-
-  function actionNoInsurance() {
-    if (state.phase !== PHASE.INSURANCE) return;
-    state.insuranceBet = 0;
-    _afterInsurance();
-  }
-
-  function _afterInsurance() {
-    setButtonStates({ insurance: false, noIns: false });
-    const dealerBJ = _dealerHasBlackjack(); // peek at hole card
-    const playerBJ = _isBlackjack(state.hands[0].cards);
-
-    if (dealerBJ) {
-      revealCard(state.dealerCards[1]);
-      renderDealerHand(true);
-      if (playerBJ) {
-        setMessage('PUSH — Both Blackjack!', 'push');
-      } else {
-        setMessage('Dealer Blackjack!', 'loss');
-      }
-      transitionTo(PHASE.RESOLVING);
-      return;
-    }
-
-    // No dealer BJ — reveal hole card for transparency, then continue
-    if (playerBJ) {
-      revealCard(state.dealerCards[1]);
-      renderDealerHand(true);
-      setMessage('BLACKJACK! 🃏 3:2', 'bj');
-      transitionTo(PHASE.RESOLVING);
-      return;
-    }
-
-    transitionTo(PHASE.PLAYER_TURN);
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  HAND ADVANCE
-  // ─────────────────────────────────────────────────────────────
-
-  function advanceHand() {
-    // Find next undone hand
-    const nextIdx = state.hands.findIndex((h, i) => i > state.activeHandIdx && !h.done);
-    if (nextIdx !== -1) {
-      state.activeHandIdx = nextIdx;
-      renderAllHands();
-      // If ace split hand has 21 or bust, it's already done
-      updateAvailableActions();
-      updateStrategyHighlight();
-    } else {
-      // Check if all hands busted / surrendered
-      const anyAlive = state.hands.some(h => {
-        if (h.surrendered) return false;
-        const { isBust } = Strategy.getHandTotal(h.cards);
-        return !isBust;
-      });
-
-      if (!anyAlive) {
-        transitionTo(PHASE.RESOLVING);
-      } else {
-        transitionTo(PHASE.DEALER_TURN);
-      }
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  AVAILABLE ACTIONS
-  // ─────────────────────────────────────────────────────────────
-
-  function getAvailableActions(hand) {
-    const { total } = Strategy.getHandTotal(hand.cards);
-    const isFirstAction = hand.cards.length === 2 && !hand.fromSplit;
-    const isFirstActionAnySplit = hand.cards.length === 2; // 2 cards including after split
-
-    const canHit       = !hand.done && total < 21 && !hand.isAceSplit;
-    const canStand     = !hand.done;
-    const canDouble    = isFirstActionAnySplit && state.balance >= hand.bet;
-    const canSurrender = isFirstAction && state.hands.length === 1 && !hand.fromSplit;
-    const canSplit     = (
-      isFirstActionAnySplit &&
-      hand.cards.length === 2 &&
-      Strategy.cardValue(hand.cards[0]) === Strategy.cardValue(hand.cards[1]) &&
-      state.splitCount < 3 &&
-      state.balance >= hand.bet &&
-      // No re-split of aces
-      !(hand.isAceSplit || (Strategy.cardValue(hand.cards[0]) === 11 && hand.fromSplit))
-    );
-
-    return { canHit, canStand, canDouble, canSurrender, canSplit };
-  }
-
-  function updateAvailableActions() {
-    if (state.phase !== PHASE.PLAYER_TURN) return;
-    const hand = state.hands[state.activeHandIdx];
-    const { canHit, canStand, canDouble, canSurrender, canSplit } = getAvailableActions(hand);
-
-    setButtonStates({
-      hit:       canHit,
-      stand:     canStand,
-      double:    canDouble,
-      split:     canSplit,
-      surrender: canSurrender,
-      deal:      false,
-      insurance: false,
-      noIns:     false,
-    });
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  BETTING
-  // ─────────────────────────────────────────────────────────────
-
-  function addBet(amount) {
-    if (state.phase !== PHASE.IDLE) return;
-    if (state.balance <= 0) return;
-    const actual = Math.min(amount, state.balance);
-    state.bet += actual;
-    if (state.bet > state.balance) state.bet = state.balance;
-    updateBetDisplay();
-    updateDealButton();
-  }
-
-  function clearBet() {
-    if (state.phase !== PHASE.IDLE) return;
-    state.bet = 0;
-    updateBetDisplay();
-    updateDealButton();
-  }
-
-  function dealStart() {
-    if (state.phase !== PHASE.IDLE) return;
-    if (state.bet <= 0) return;
-    if (state.balance < state.bet) return;
-
-    balanceBeforeRound = state.balance;
-    state.balance -= state.bet;
-    updateBalanceDisplay();
-
-    transitionTo(PHASE.DEALING);
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  STRATEGY FEEDBACK & WRONG-ACTION HIGHLIGHT
-  // ─────────────────────────────────────────────────────────────
-
-  const ACTION_LABELS = { H: 'Hit', S: 'Stand', D: 'Double', P: 'Split', R: 'Surrender' };
-
-  /**
-   * Called before executing a player action.
-   * Compares chosen action vs strategy recommendation and shows feedback.
-   */
-  function checkAction(chosenAction) {
-    if (state.phase !== PHASE.PLAYER_TURN) return;
-
-    const hand = state.hands[state.activeHandIdx];
-    const dealerUpcard = Strategy.cardValue(state.dealerCards[0]);
-    const { canDouble, canSplit, canSurrender } = getAvailableActions(hand);
-    const isFirstAction = hand.cards.length === 2 && !hand.fromSplit;
-
-    const { action: recommended, tableType, rowKey } = Strategy.getAction(
-      hand.cards, dealerUpcard,
-      { canDouble, canSplit, canSurrender: isFirstAction && canSurrender, isFirstAction }
-    );
-
-    currentHandActionLog.push({
-      handIdx:       state.activeHandIdx,
-      cards:         hand.cards.map(c => ({ rank: c.rank, suit: c.suit })),
-      takenAction:   chosenAction,
-      correctAction: recommended,
-      wasCorrect:    chosenAction === recommended,
-    });
-
-    if (chosenAction === recommended) {
-      setStrategyFeedback(`✓ Correct — ${ACTION_LABELS[recommended]}`, 'correct');
-      clearWrongHighlight();
-    } else {
-      hadWrongAction = true;
-      // Re-trigger shake animation even on consecutive wrong moves
-      const el = document.getElementById('strategy-feedback');
-      if (el) el.classList.remove('wrong');
-      requestAnimationFrame(() => {
-        setStrategyFeedback(
-          `✗ Mauvaise déc. ! Il fallait : ${ACTION_LABELS[recommended]}`,
-          'wrong'
-        );
-      });
-      // Persist the highlight on the correct row
-      clearTimeout(wrongHighlightTimer);
-      wrongHighlight = { tableType, rowKey };
-      wrongHighlightTimer = setTimeout(clearWrongHighlight, 5000);
-    }
-  }
-
-  function clearWrongHighlight() {
-    wrongHighlight = null;
-    clearTimeout(wrongHighlightTimer);
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  STRATEGY HIGHLIGHT
-  // ─────────────────────────────────────────────────────────────
-
-  function updateStrategyHighlight() {
-    if (state.phase !== PHASE.PLAYER_TURN) {
-      // Keep wrong highlight visible even outside player turn
-      if (!wrongHighlight) Strategy.clearHighlights();
-      return;
-    }
-
-    // If a wrong move was just made, keep that row highlighted (not the new hand's row)
-    if (wrongHighlight) {
-      Strategy.highlightRow(wrongHighlight.tableType, wrongHighlight.rowKey);
-      return;
-    }
-
-    const hand = state.hands[state.activeHandIdx];
-    const dealerUpcard = Strategy.cardValue(state.dealerCards[0]);
-    const { canDouble, canSplit, canSurrender } = getAvailableActions(hand);
-    const isFirstAction = hand.cards.length === 2 && !hand.fromSplit;
-
-    const { action, tableType, rowKey } = Strategy.getAction(
-      hand.cards,
-      dealerUpcard,
-      { canDouble, canSplit, canSurrender: isFirstAction && canSurrender, isFirstAction }
-    );
-
-    Strategy.highlightRow(tableType, rowKey);
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  RENDERING
-  // ─────────────────────────────────────────────────────────────
-
-  function _suitClass(suit) {
-    return (suit === '♥' || suit === '♦') ? 'suit-red' : 'suit-black';
-  }
-
-  /**
-   * Create a card DOM element.
-   * @param {Object} card — { rank, suit, faceDown }
-   * @param {boolean} compact — use compact size
-   */
-  function createCardElement(card, compact = false) {
-    const div = document.createElement('div');
-    div.className = 'card' + (compact ? ' compact' : '');
-
-    if (card.faceDown) {
-      div.innerHTML = `<div class="card-face-down"></div>`;
-      return div;
-    }
-
-    const sClass = _suitClass(card.suit);
-    div.innerHTML = `
-      <div class="card-front">
-        <div class="card-corner ${sClass}">
-          <span class="corner-rank">${card.rank}</span>
-          <span class="corner-suit">${card.suit}</span>
-        </div>
-        <span class="card-suit-big ${sClass}">${card.suit}</span>
-        <div class="card-corner bottom-right ${sClass}">
-          <span class="corner-rank">${card.rank}</span>
-          <span class="corner-suit">${card.suit}</span>
-        </div>
-      </div>
-    `;
-
-    div.style.setProperty('--card-w', compact ? '55px' : '70px');
-    div.style.setProperty('--card-h', compact ? '78px' : '96px');
-
-    return div;
-  }
-
-  function renderDealerHand(revealed = false) {
-    const container = document.getElementById('dealer-cards');
-    if (!container) return;
-    container.innerHTML = '';
-
-    state.dealerCards.forEach(card => {
-      const el = createCardElement(card);
-      el.classList.add('card-enter');
-      container.appendChild(el);
-    });
-
-    // Update dealer score
-    if (revealed) {
-      const { total, isBust } = Strategy.getFullHandTotal(state.dealerCards);
-      setDealerScore(isBust ? `${total} BUST` : String(total));
-    } else {
-      // Show only upcard value
-      const visible = state.dealerCards.filter(c => !c.faceDown);
-      if (visible.length > 0) {
-        const { total } = Strategy.getHandTotal(visible);
-        setDealerScore(String(total) + ' +?');
-      }
-    }
-  }
-
-  function renderAllHands() {
-    const container = document.getElementById('hands-container');
-    if (!container) return;
-    container.innerHTML = '';
-
-    const compact = state.hands.length >= 3;
-
-    state.hands.forEach((hand, idx) => {
-      const box = document.createElement('div');
-      box.className = 'hand-box' + (idx === state.activeHandIdx && !hand.done ? ' active-hand' : '');
-
-      // Cards row
-      const cardsRow = document.createElement('div');
-      cardsRow.className = 'cards-row';
-      hand.cards.forEach(card => {
-        const el = createCardElement(card, compact);
-        el.classList.add('card-enter');
-        cardsRow.appendChild(el);
-      });
-      box.appendChild(cardsRow);
-
-      // Score
-      const { total, isBust } = Strategy.getHandTotal(hand.cards);
-      const scoreEl = document.createElement('div');
-      scoreEl.className = 'hand-score' + (isBust ? ' bust' : '');
-
-      let scoreText = String(total);
-      if (isBust) scoreText += ' BUST';
-      if (hand.doubled) scoreText += ' ×2';
-      if (hand.surrendered) scoreText = 'Surrender';
-      if (_isBlackjack(hand.cards) && !hand.fromSplit) scoreText = 'BJ';
-
-      scoreEl.textContent = scoreText;
-      box.appendChild(scoreEl);
-
-      // Label
-      if (state.hands.length > 1) {
-        const labelEl = document.createElement('div');
-        labelEl.className = 'hand-label';
-        labelEl.textContent = `HAND ${idx + 1}  $${hand.bet}`;
-        box.appendChild(labelEl);
-      }
-
-      container.appendChild(box);
-    });
-
-    // Update bet display to reflect total bets
-    const totalBet = state.hands.reduce((sum, h) => sum + h.bet, 0);
-    document.getElementById('bet-display').textContent = '$' + totalBet;
-  }
-
-  function clearHands() {
-    const dc = document.getElementById('dealer-cards');
-    const hc = document.getElementById('hands-container');
-    if (dc) dc.innerHTML = '';
-    if (hc) hc.innerHTML = '';
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  DISPLAY UPDATES
-  // ─────────────────────────────────────────────────────────────
-
-  function updateCountDisplay() {
-    const rc = state.runningCount;
-    const tc = getTrueCount();
-    const decks = getDecksRemaining();
-
-    const rcEl = document.getElementById('rc-value');
-    const tcEl = document.getElementById('tc-value');
-    const decksEl = document.getElementById('decks-value');
-    const rcChip  = document.getElementById('stat-rc');
-    const tcChip  = document.getElementById('stat-tc');
-
-    if (rcEl) {
-      rcEl.textContent = rc > 0 ? '+' + rc : String(rc);
-      rcEl.className = 'stat-value ' + (rc > 0 ? 'positive' : rc < 0 ? 'negative' : 'neutral');
-    }
-    if (tcEl) {
-      const tcStr = (tc > 0 ? '+' : '') + tc.toFixed(1);
-      tcEl.textContent = tcStr;
-      tcEl.className = 'stat-value ' + (tc > 0 ? 'positive' : tc < 0 ? 'negative' : 'neutral');
-    }
-    if (decksEl) {
-      decksEl.textContent = decks.toFixed(1);
-    }
-  }
-
-  function updateShoeBar() {
-    const fill   = document.getElementById('shoe-fill');
-    const bar    = document.getElementById('shoe-bar');
-    if (!fill || !bar) return;
-
-    const pct = (state.shoe.length / TOTAL_CARDS) * 100;
-    fill.style.width = pct + '%';
-  }
-
-  function updateBalanceDisplay() {
-    const el = document.getElementById('balance-display');
-    if (el) el.textContent = '$' + state.balance;
-  }
-
-  function updateBetDisplay() {
-    const el = document.getElementById('bet-display');
-    if (el) el.textContent = '$' + state.bet;
-  }
-
-  function updateDealButton() {
-    const btn = document.getElementById('btn-deal');
-    if (!btn) return;
-    btn.disabled = !(state.bet > 0 && state.balance >= 0);
-  }
-
-  function setDealerScore(text) {
-    const el = document.getElementById('dealer-score');
-    if (el) el.textContent = text;
-  }
-
-  function setHandScore(idx, text, bust = false) {
-    const container = document.getElementById('hands-container');
-    if (!container) return;
-    const boxes = container.querySelectorAll('.hand-box');
-    if (boxes[idx]) {
-      const scoreEl = boxes[idx].querySelector('.hand-score');
-      if (scoreEl) {
-        scoreEl.textContent = text;
-        if (bust) scoreEl.classList.add('bust');
-      }
-    }
-  }
-
-  function setMessage(text, type = '') {
-    const el = document.getElementById('message-area');
-    if (!el) return;
-    el.textContent = text;
-    el.className = 'message-area ' + type;
-  }
-
-  function setStrategyFeedback(text, type = '') {
-    const el = document.getElementById('strategy-feedback');
-    if (!el) return;
-    el.textContent = text;
-    el.className = 'strategy-feedback ' + type;
-  }
-
-  function enableChips(enabled) {
-    document.querySelectorAll('.chip').forEach(btn => {
-      btn.disabled = !enabled;
-    });
-  }
-
-  /**
-   * Set button enabled/disabled states.
-   * Pass only the buttons you want to change; omitted ones are unchanged.
-   */
-  function setButtonStates(states) {
-    const map = {
-      deal:       'btn-deal',
-      hit:        'btn-hit',
-      stand:      'btn-stand',
-      double:     'btn-double',
-      split:      'btn-split',
-      surrender:  'btn-surrender',
-      insurance:  'btn-insurance',
-      noIns:      'btn-no-insurance',
-    };
-    for (const [key, val] of Object.entries(states)) {
-      const id = map[key];
-      if (!id) continue;
-      const btn = document.getElementById(id);
-      if (!btn) continue;
-
-      if (key === 'insurance' || key === 'noIns') {
-        btn.hidden    = !val;
-        btn.disabled  = !val;
-      } else {
-        btn.disabled = !val;
-      }
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  HELPERS
-  // ─────────────────────────────────────────────────────────────
-
-  // Peek at dealer's hole card regardless of face-down status (for dealer BJ check)
-  function _dealerHasBlackjack() {
-    const cards = state.dealerCards;
-    if (cards.length !== 2) return false;
-    const vals = cards.map(c => Strategy.cardValue(c));
-    return (vals[0] === 11 && vals[1] === 10) || (vals[0] === 10 && vals[1] === 11);
-  }
-
-  function _isBlackjack(cards) {
-    const visible = cards.filter(c => !c.faceDown);
-    if (visible.length !== 2) return false;
-    const vals = visible.map(c => Strategy.cardValue(c));
-    return (
-      (vals[0] === 11 && vals[1] === 10) ||
-      (vals[0] === 10 && vals[1] === 11)
-    );
-  }
-
-  function delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  HAND HISTORY
-  // ─────────────────────────────────────────────────────────────
-  const HISTORY_MAX = 4;
-
-  function _addToHistory(net) {
-    // Player summary: one entry per hand (BJ / BUST / SURR / total)
-    const playerParts = state.hands.map(h => {
+  // ─── history ──────────────────────────────────────────────────
+  function _addToHistory(state, prevState, me) {
+    const prevMe = prevState.players?.find(p => p.pseudo === myPseudo);
+    if (!prevMe) return;
+    const net = me.balance - prevMe.balance;
+
+    const playerParts = (prevMe.hands || []).map(h => {
       if (h.surrendered) return 'SURR';
-      const { total, isBust } = Strategy.getFullHandTotal(h.cards);
+      const { total, isBust } = Strategy.getHandTotal(h.cards);
       if (isBust) return 'BUST';
       if (_isBlackjack(h.cards) && !h.fromSplit) return 'BJ';
       return String(total);
     });
 
-    // Dealer summary
-    const { total: dt, isBust: db } = Strategy.getFullHandTotal(state.dealerCards);
+    const { total: dt, isBust: db } = Strategy.getFullHandTotal(prevState.dealerCards || []);
     const dealerText = db ? 'BUST' : String(dt);
 
-    // Result class
-    // Couleur = qualité des décisions (pas le résultat financier)
-    const decisionClass = hadWrongAction ? 'bad' : 'good';
-
     handHistory.unshift({
-      playerText: playerParts.join(' / '), dealerText, decisionClass, net,
+      playerText:   playerParts.join(' / ') || '—',
+      dealerText,
+      decisionClass: hadWrongAction ? 'bad' : 'good',
+      net,
       actions:  [...currentHandActionLog],
-      dealerUp: { rank: state.dealerCards[0].rank, suit: state.dealerCards[0].suit },
+      dealerUp: prevState.dealerCards?.[0] || { rank:'?', suit:'' },
     });
     if (handHistory.length > HISTORY_MAX) handHistory.pop();
+
+    hadWrongAction       = false;
+    currentHandActionLog = [];
     _renderHistory();
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  HISTORY DETAIL POPUP
-  // ─────────────────────────────────────────────────────────────
-
-  const ACT_LABEL = { H: 'Hit', S: 'Stand', D: 'Double', P: 'Split', R: 'Surrender' };
-
-  function _ensureDetailPopup() {
-    if (document.getElementById('history-detail')) return;
-    const el = document.createElement('div');
-    el.id = 'history-detail';
-    el.className = 'history-detail';
-    document.body.appendChild(el);
-  }
-
-  function _showDetail(entry, anchorEl) {
-    const popup = document.getElementById('history-detail');
-    if (!popup) return;
-
-    const byHand = {};
-    (entry.actions || []).forEach(a => {
-      (byHand[a.handIdx] = byHand[a.handIdx] || []).push(a);
-    });
-    const handCount = Object.keys(byHand).length;
-
-    let html = `<div class="hd-dealer">Dealer up : ${entry.dealerUp.rank}${entry.dealerUp.suit}</div>`;
-
-    if (!entry.actions || entry.actions.length === 0) {
-      html += `<div class="hd-no-actions">BJ / auto-surrender</div>`;
-    } else {
-      Object.entries(byHand).forEach(([hIdx, actions]) => {
-        if (handCount > 1) html += `<div class="hd-hand-label">Hand ${+hIdx + 1}</div>`;
-        actions.forEach((a, i) => {
-          const cardsStr = a.cards.map(c => c.rank + c.suit).join(' ');
-          const icon = a.wasCorrect ? '✓' : '✗';
-          const cls  = a.wasCorrect ? 'hd-ok' : 'hd-err';
-          html += `<div class="hd-action">
-            <span class="hd-num">${i + 1}.</span>
-            <span class="hd-cards">${cardsStr}</span>
-            <span class="hd-act">${ACT_LABEL[a.takenAction]}</span>
-            <span class="${cls}">${icon}</span>
-            ${!a.wasCorrect ? `<span class="hd-should">→ ${ACT_LABEL[a.correctAction]}</span>` : ''}
-          </div>`;
-        });
-      });
-    }
-
-    popup.innerHTML = html;
-
-    // Positionner à droite de l'entrée, aligné en haut
-    const rect = anchorEl.getBoundingClientRect();
-    let top  = rect.top;
-    let left = rect.right + 8;
-
-    popup.classList.add('visible');
-    // Eviter débordement en bas (recalculer après rendu)
-    const maxTop = window.innerHeight - popup.offsetHeight - 8;
-    if (top > maxTop) top = maxTop;
-
-    popup.style.top  = top + 'px';
-    popup.style.left = left + 'px';
-  }
-
-  function _hideDetail() {
-    const popup = document.getElementById('history-detail');
-    if (popup) popup.classList.remove('visible');
   }
 
   function _renderHistory() {
     const el = document.getElementById('history-list');
     if (!el) return;
     el.innerHTML = '';
-    if (handHistory.length === 0) {
-      el.innerHTML = '<div class="history-empty">No hands yet</div>';
-      return;
-    }
+    if (!handHistory.length) { el.innerHTML = '<div class="history-empty">No hands yet</div>'; return; }
     handHistory.forEach(entry => {
-      const sign    = entry.net > 0 ? '+' : '';
-      const netCls  = entry.net > 0 ? 'pos' : entry.net < 0 ? 'neg' : 'zero';
-      const icon    = entry.decisionClass === 'good' ? '✓' : '✗';
-      const div     = document.createElement('div');
+      const sign   = entry.net > 0 ? '+' : '';
+      const netCls = entry.net > 0 ? 'pos' : entry.net < 0 ? 'neg' : 'zero';
+      const icon   = entry.decisionClass === 'good' ? '✓' : '✗';
+      const div    = document.createElement('div');
       div.className = `history-entry h-${entry.decisionClass}`;
       div.innerHTML = `
         <div class="h-row">
           <span class="h-icon">${icon}</span>
           <span class="h-net h-net-${netCls}">${sign}$${entry.net}</span>
         </div>
-        <div class="h-totals">${entry.playerText} <span class="h-vs">vs</span> ${entry.dealerText}</div>
-      `;
+        <div class="h-totals">${entry.playerText} <span class="h-vs">vs</span> ${entry.dealerText}</div>`;
       div.addEventListener('mouseenter', () => _showDetail(entry, div));
-      div.addEventListener('mouseleave', _hideDetail);
+      div.addEventListener('mouseleave',  _hideDetail);
       el.appendChild(div);
     });
   }
 
-  // ─────────────────────────────────────────────────────────────
-  //  INIT
-  // ─────────────────────────────────────────────────────────────
-
-  function init() {
-    // Charger le token depuis .env puis démarrer
-    _loadToken().then(() => _boot());
+  function _ensureDetailPopup() {
+    if (document.getElementById('history-detail')) return;
+    const el = document.createElement('div');
+    el.id = 'history-detail'; el.className = 'history-detail';
+    document.body.appendChild(el);
   }
 
-  function _boot() {
-    // Render strategy charts
+  function _showDetail(entry, anchor) {
+    const popup = document.getElementById('history-detail');
+    if (!popup) return;
+    const byHand = {};
+    (entry.actions||[]).forEach(a => (byHand[a.handIdx]=byHand[a.handIdx]||[]).push(a));
+    const hCount = Object.keys(byHand).length;
+    let html = `<div class="hd-dealer">Dealer up : ${entry.dealerUp.rank}${entry.dealerUp.suit}</div>`;
+    if (!entry.actions?.length) {
+      html += `<div class="hd-no-actions">BJ / auto</div>`;
+    } else {
+      Object.entries(byHand).forEach(([hi, actions]) => {
+        if (hCount>1) html+=`<div class="hd-hand-label">Hand ${+hi+1}</div>`;
+        actions.forEach((a,i) => {
+          const cards = a.cards.map(c=>c.rank+c.suit).join(' ');
+          const cls   = a.wasCorrect ? 'hd-ok' : 'hd-err';
+          html += `<div class="hd-action">
+            <span class="hd-num">${i+1}.</span>
+            <span class="hd-cards">${cards}</span>
+            <span class="hd-act">${ACT_LABEL[a.takenAction]}</span>
+            <span class="${cls}">${a.wasCorrect?'✓':'✗'}</span>
+            ${!a.wasCorrect?`<span class="hd-should">→ ${ACT_LABEL[a.correctAction]}</span>`:''}
+          </div>`;
+        });
+      });
+    }
+    popup.innerHTML = html;
+    const rect = anchor.getBoundingClientRect();
+    let top = rect.top, left = rect.right + 8;
+    popup.classList.add('visible');
+    const maxTop = window.innerHeight - popup.offsetHeight - 8;
+    if (top > maxTop) top = maxTop;
+    popup.style.top = top + 'px'; popup.style.left = left + 'px';
+  }
+
+  function _hideDetail() {
+    document.getElementById('history-detail')?.classList.remove('visible');
+  }
+
+  // ─── util ─────────────────────────────────────────────────────
+  function _cardValue(c) {
+    if (!c) return 0;
+    if (c.rank === 'A') return 11;
+    if ('TJQK'.includes(c.rank)) return 10;
+    return parseInt(c.rank, 10);
+  }
+
+  function _isBlackjack(cards) {
+    const vis = (cards||[]).filter(c => !c.faceDown);
+    if (vis.length !== 2) return false;
+    const vals = vis.map(_cardValue);
+    return (vals[0]===11&&vals[1]===10)||(vals[0]===10&&vals[1]===11);
+  }
+
+  function _escHtml(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ─── init ─────────────────────────────────────────────────────
+  function init() {
     Strategy.renderCharts();
     _ensureDetailPopup();
 
-    // Wire up buttons
-    document.getElementById('btn-deal')?.addEventListener('click', dealStart);
-    document.getElementById('btn-hit')?.addEventListener('click', actionHit);
-    document.getElementById('btn-stand')?.addEventListener('click', actionStand);
-    document.getElementById('btn-double')?.addEventListener('click', actionDouble);
-    document.getElementById('btn-split')?.addEventListener('click', actionSplit);
-    document.getElementById('btn-surrender')?.addEventListener('click', actionSurrender);
-    document.getElementById('btn-insurance')?.addEventListener('click', actionInsurance);
-    document.getElementById('btn-no-insurance')?.addEventListener('click', actionNoInsurance);
-    document.getElementById('btn-clear-bet')?.addEventListener('click', clearBet);
-
-    // Chip buttons
-    document.querySelectorAll('.chip[data-amount]').forEach(btn => {
-      btn.addEventListener('click', () => addBet(parseInt(btn.dataset.amount, 10)));
-    });
-
-    // Strategy toggle
-    const toggleBtn  = document.getElementById('strategy-toggle');
-    const panel      = document.getElementById('strategy-panel');
-    if (toggleBtn && panel) {
-      toggleBtn.addEventListener('click', () => {
-        panel.classList.toggle('collapsed');
+    // Join screen
+    const joinForm = document.getElementById('join-form');
+    if (joinForm) {
+      joinForm.addEventListener('submit', e => {
+        e.preventDefault();
+        const input  = document.getElementById('join-pseudo');
+        const pseudo = (input?.value || '').trim();
+        if (!pseudo) return;
+        myPseudo = pseudo;
+        send({ type: 'join', pseudo });
       });
     }
 
-    // Auto-bet toggle
+    // Betting chips
+    document.querySelectorAll('.chip[data-amount]').forEach(btn => {
+      btn.addEventListener('click', () => send({ type:'bet', amount: parseInt(btn.dataset.amount,10) }));
+    });
+    document.getElementById('btn-clear-bet')?.addEventListener('click', () => send({ type:'clearBet' }));
+
+    // Actions — capture action + check feedback before sending
+    const actionBtns = [
+      ['btn-hit',       'hit',       'H'],
+      ['btn-stand',     'stand',     'S'],
+      ['btn-double',    'double',    'D'],
+      ['btn-split',     'split',     'P'],
+      ['btn-surrender', 'surrender', 'R'],
+    ];
+    actionBtns.forEach(([id, action, code]) => {
+      document.getElementById(id)?.addEventListener('click', () => {
+        if (!lastState || !myPseudo) return;
+        const isMyTurn = lastState.phase === 'PLAYER_TURN' &&
+                         lastState.players[lastState.activePlayerIdx]?.pseudo === myPseudo;
+        const isOtherTurn = lastState.phase === 'PLAYER_TURN' && !isMyTurn;
+
+        if (isOtherTurn) {
+          // Pre-select mode: toggle or set
+          _setPreSelect(preSelectedAction === action ? null : action);
+          return;
+        }
+
+        // My turn: send immediately
+        const me   = lastState.players.find(p => p.pseudo === myPseudo);
+        const hand = me?.hands[me.activeHandIdx];
+        if (me && hand && lastState.dealerCards.length) {
+          checkActionFeedback(code, hand, lastState.dealerCards, me);
+        }
+        send({ type:'action', action });
+      });
+    });
+
+    // Cancel pre-select
+    document.getElementById('preselect-cancel')?.addEventListener('click', () => _setPreSelect(null));
+
+    // Insurance
+    document.getElementById('btn-insurance')?.addEventListener('click', () =>
+      send({ type:'insurance', take: true }));
+    document.getElementById('btn-no-insurance')?.addEventListener('click', () =>
+      send({ type:'insurance', take: false }));
+
+    // Shuffle
+    document.getElementById('btn-shuffle')?.addEventListener('click', () =>
+      send({ type:'shuffle' }));
+
+    // Auto-bet toggle (client-only, sends bet on click)
+    let autoBet = false;
     const autoBetBtn = document.getElementById('btn-auto-bet');
     if (autoBetBtn) {
       autoBetBtn.addEventListener('click', () => {
         autoBet = !autoBet;
         autoBetBtn.classList.toggle('active', autoBet);
-        // Apply immediately if currently in IDLE with no bet
-        if (autoBet && state.phase === PHASE.IDLE && state.bet === 0 && state.balance >= AUTO_BET_AMOUNT) {
-          state.bet = AUTO_BET_AMOUNT;
-          updateBetDisplay();
-          updateDealButton();
-        }
+        if (autoBet && lastState?.phase === 'IDLE') send({ type:'bet', amount: 5 });
       });
     }
 
-    // Mode toggle (simple / hard)
+    // Mode toggle
     const modeBtn   = document.getElementById('mode-toggle');
     const modeLabel = document.getElementById('mode-label');
+    document.body.classList.add('simple-mode');
     if (modeBtn) {
-      // Apply simple mode on startup
-      document.body.classList.add('simple-mode');
-
       modeBtn.addEventListener('click', () => {
         if (gameMode === 'simple') {
           gameMode = 'hard';
@@ -1344,45 +799,25 @@ const Game = (() => {
       });
     }
 
-    // Bouton SHUFFLE forcé
-    document.getElementById('btn-shuffle')?.addEventListener('click', async () => {
-      if (state.phase !== PHASE.IDLE) return;
-      enableChips(false);
-      setButtonStates({ deal: false });
-      setMessage('🎲 Fetching seed…', 'info');
-      await initShoe();
-      setMessage('♻ New shoe — place your bet.', 'info');
-      enableChips(true);
-      updateDealButton();
-    });
+    // Strategy toggle
+    const stratBtn = document.getElementById('strategy-toggle');
+    const panel    = document.getElementById('strategy-panel');
+    if (stratBtn && panel) {
+      stratBtn.addEventListener('click', () => panel.classList.toggle('collapsed'));
+    }
 
-    // Enter IDLE state
-    transitionTo(PHASE.IDLE);
+    // Connect WebSocket
+    connect();
+
+    // Show join screen until we get welcome
+    showJoinScreen();
   }
 
-  // ─────────────────────────────────────────────────────────────
-  //  BOOT
-  // ─────────────────────────────────────────────────────────────
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {
     init();
   }
 
-  // Public API (mostly for debugging)
-  return {
-    state,
-    phase: PHASE,
-    initShoe,
-    getTrueCount,
-    getDecksRemaining,
-    actionHit,
-    actionStand,
-    actionDouble,
-    actionSplit,
-    actionSurrender,
-    actionInsurance,
-    actionNoInsurance,
-  };
-
+  return {};
 })();

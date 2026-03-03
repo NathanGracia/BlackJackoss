@@ -1,0 +1,6 @@
+services:
+  blackjackoss:
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: ["node", "--watch", "server.js"]

@@ -555,6 +555,47 @@ body::before {
   opacity: 0.2;
 }
 
+/* ── Bet timer bar ── */
+.bet-timer-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0 0.25rem;
+}
+
+.bet-timer-track {
+  flex: 1;
+  height: 4px;
+  background: var(--bg-raised);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.bet-timer-bar {
+  height: 100%;
+  width: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transform-origin: left;
+  transition: background 0.5s ease;
+}
+
+.bet-timer-bar.urgent { background: var(--amber); }
+.bet-timer-bar.critical { background: var(--red); }
+
+.bet-timer-label {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--text-faint);
+  min-width: 1.8rem;
+  text-align: right;
+  font-family: var(--font-mono);
+  transition: color 0.3s;
+}
+
+.bet-timer-label.urgent   { color: var(--amber); }
+.bet-timer-label.critical { color: var(--red); }
+
 /* ── Bet row ── */
 .bet-row {
   display: flex;
@@ -1178,6 +1219,29 @@ body::before {
 .action-btn[data-tooltip],
 .chip[data-tooltip] { overflow: visible; }
 
+/* ── Bouton retour menu ── */
+.back-btn {
+  display: flex;
+  align-items: center;
+  padding: 0.25rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  font-family: var(--font);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  flex-shrink: 0;
+  transition: all var(--transition);
+}
+.back-btn:hover {
+  background: var(--bg-surface);
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+
 /* ── Bouton Shuffle ── */
 .shuffle-btn {
   display: flex;
@@ -1309,6 +1373,217 @@ body::before {
 .hd-err   { color: var(--red); }
 .hd-should     { color: var(--text-faint); font-size: 0.62rem; }
 .hd-no-actions { color: var(--text-faint); font-style: italic; }
+
+/* ── Join Screen ── */
+.join-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-deep);
+}
+
+.join-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-lg);
+  padding: 2.5rem 2rem;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  box-shadow: var(--shadow-lg);
+}
+
+.join-brand {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.05em;
+}
+
+.join-subtitle {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  letter-spacing: 0.06em;
+}
+
+.join-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  width: 100%;
+}
+
+.join-input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-mid);
+  background: var(--bg-raised);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 0.85rem;
+  outline: none;
+  transition: border-color var(--transition);
+}
+.join-input:focus { border-color: var(--accent-dim); }
+
+.join-btn {
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(155,142,196,0.35);
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-family: var(--font);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+  letter-spacing: 0.04em;
+}
+.join-btn:hover {
+  background: rgba(155,142,196,0.18);
+  border-color: var(--accent);
+}
+
+/* ── Table seats ── */
+.table-seats {
+  display: flex;
+  gap: 0.6rem;
+  justify-content: center;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  padding: 0.65rem 0.75rem;
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  min-height: 110px;
+}
+
+.seat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  min-width: 64px;
+  position: relative;
+}
+
+.seat.disconnected { opacity: 0.35; }
+
+/* My seat — subtle tint */
+.seat.my-seat {
+  border-color: var(--border-mid);
+  background: rgba(155,142,196,0.05);
+}
+
+/* Active seat — glow + border */
+.seat.active-seat {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(155,142,196,0.12);
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.seat-name-row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-bottom: 0.1rem;
+}
+
+.seat-active-dot {
+  font-size: 0.55rem;
+  color: var(--accent);
+  animation: soft-pulse 1.2s ease-in-out infinite;
+}
+
+.seat-name {
+  font-size: 0.58rem;
+  font-weight: 600;
+  color: var(--text-faint);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.active-seat .seat-name { color: var(--accent); }
+.my-seat .seat-name     { color: var(--text); }
+
+.seat-score {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--green);
+  margin-top: 0.1rem;
+}
+.seat-score.bust { color: var(--red); }
+
+.seat-info {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  margin-top: 0.15rem;
+}
+
+.seat-balance {
+  font-size: 0.52rem;
+  color: var(--text-faint);
+}
+
+.seat-bet {
+  font-size: 0.55rem;
+  font-weight: 700;
+  color: var(--amber);
+}
+
+.seat-waiting {
+  font-size: 0.5rem;
+  color: var(--text-faint);
+  font-style: italic;
+  margin-top: 0.3rem;
+}
+
+/* ── Pre-select hint ── */
+.preselect-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.75rem;
+  background: rgba(155,142,196,0.08);
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--radius-sm);
+  font-size: 0.7rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.preselect-cancel {
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 0.65rem;
+  padding: 0 0.2rem;
+  line-height: 1;
+  transition: color var(--transition);
+}
+.preselect-cancel:hover { color: var(--red); }
+
+/* Pre-selected button state */
+.action-btn.preselected {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
 
 /* ── Utility ── */
 [hidden] { display: none !important; }

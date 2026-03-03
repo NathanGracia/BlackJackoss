@@ -4,36 +4,115 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Running the project
 
-No build step — pure vanilla HTML/CSS/JS.
-
 ```bash
-npx serve .        # http://localhost:3000  (recommended: avoids CORS issues on file://)
-python -m http.server 8080   # alternative
+# Docker (hot-reload, recommended for dev)
+docker compose up --build   # first run
+docker compose up           # subsequent runs (node --watch inside container)
+
+# Node direct
+npm install && node server.js
+npm run dev   # hot-reload via node --watch
 ```
 
-Or just open `index.html` directly in a browser (Determinoss seed fetch may fail due to CORS).
+Server serves static files + WebSocket on http://localhost:3000
+
+## Pages
+
+| File | Route | Description |
+|---|---|---|
+| `index.html` | `/` | Landing — two mode buttons |
+| `solo.html` | `/solo.html` | Standalone solo trainer (no server needed) |
+| `multi.html` | `/multi.html` | Multiplayer client (WebSocket) |
 
 ## Architecture
 
-Three IIFEs loaded in order via `<script>` tags:
+```
+browser                          Node.js server
+──────────────────────           ──────────────────────────────
+js/game.js      (WS client)  ←→  server.js          (HTTP + WS router)
+js/game-solo.js (standalone)      server/game-engine.js  (authoritative FSM)
+js/strategy.js  (intact)          server/persistence.js  (balances.json)
+js/config.js    (WS_URL)          data/balances.json
+```
 
-1. **`js/config.js`** — exposes `window.Config.DETERMINOSS_TOKEN`. The token can also be loaded at runtime from a `token.txt` file served alongside `index.html` (gitignored). Token is optional; the game falls back to `Math.random()`.
+**Principle**: server is the source of truth. It broadcasts a full `state` snapshot after every mutation. The client is a pure renderer that sends actions.
 
-2. **`js/strategy.js`** — exposes the `Strategy` object. Owns:
-   - Raw strategy tables (`HARD_TABLE`, `SOFT_TABLE`, `PAIRS_TABLE`) for 6-deck S17 DAS Surrender
-   - `getAction(hand, dealerUpcard, opts)` — returns `{ action, tableType, rowKey }` where action is `H/S/D/P/R`
-   - `getHandTotal` / `getFullHandTotal` — hand scoring (soft ace handling)
-   - `renderCharts()` — builds the three HTML strategy tables (`#chart-hard`, `#chart-soft`, `#chart-pairs`)
-   - `highlightRow(tableType, rowKey)` / `clearHighlights()` — cyan highlight on the active strategy row
+## Server files
 
-3. **`js/game.js`** — exposes the `Game` object. Owns everything else:
-   - **FSM phases**: `IDLE → DEALING → INSURANCE? → PLAYER_TURN → DEALER_TURN → RESOLVING`
-   - **Shoe**: 6-deck Fisher-Yates shuffle seeded by the Determinoss API (hex seed → sfc32 PRNG). Reshuffles when < 25% remains.
-   - **State**: `{ phase, shoe, runningCount, balance, bet, insuranceBet, hands[], activeHandIdx, dealerCards[], splitCount }`
-   - **Hi-Lo counting**: RC updated on every dealt/revealed card; TC = RC ÷ (shoe.length / 52)
-   - **Modes**: `simple` (hides counting stats) vs `hard` (shows RC/TC/decks/shoe bar)
-   - **Strategy feedback**: after each player action, compares against `Strategy.getAction()` and shows correct/incorrect feedback in `#strategy-feedback`; wrong-move row highlight persists until next deal
-   - **History panel**: last N rounds stored in `handHistory[]` with net P&L, wrong-move flag, and per-action log
+### `server.js`
+HTTP static file server + WebSocket router. Loads `token.txt` or `DETERMINOSS_TOKEN` env var for Determinoss. Maps incoming WS messages to `game-engine` functions.
+
+### `server/game-engine.js`
+Authoritative game logic:
+- **FSM phases**: `IDLE → DEALING → INSURANCE? → PLAYER_TURN → DEALER_TURN → RESOLVING`
+- **Auto-deal timer**: `BET_WINDOW_MS = 8000`. On entering IDLE, `_startBetTimer()` fires. At expiry: if any bet → `_autoDeal()`, else restart timer.
+- `betDeadline` (epoch ms) is included in every broadcast so clients can animate a countdown bar.
+- **Shoe**: 6-deck Fisher-Yates with sfc32 PRNG seeded by Determinoss `/seed`. Reshuffles when < 25% remains.
+- **Sequential turns**: `activePlayerIdx` points to the active player; `advanceHand()` moves to next undone hand, then next player, then dealer.
+- **Resolving**: payouts computed, `persistence.setBalance()` called per player, then `_enterIdle()` after 2s.
+
+### `server/persistence.js`
+Reads/writes `data/balances.json` synchronously. Default balance: **$1000**.
+
+## Client files
+
+### `js/config.js`
+```js
+window.Config = { DETERMINOSS_TOKEN: '', WS_URL: 'ws://localhost:3000' };
+```
+
+### `js/strategy.js` (unchanged)
+Exposes `Strategy` object: `getAction()`, `getHandTotal()`, `getFullHandTotal()`, `renderCharts()`, `highlightRow()`, `clearHighlights()`, `cardValue()`.
+
+### `js/game.js` (multiplayer client)
+WebSocket client + renderer for `multi.html`. Key behaviors:
+- Connects to `Config.WS_URL` on load. Reconnects on close.
+- **Join screen**: pseudo input → `{ type: 'join', pseudo }` → server replies `welcome` → table shown.
+- **`onState(state, prev)`**: called on every broadcast. Renders dealer, seats row, my hands, buttons, countdown bar, strategy highlight.
+- **`renderSeats(state)`**: all players displayed in a compact row (`#table-seats`). Active player gets `active-seat` class + `▶` indicator. My seat gets `my-seat` + `★`.
+- **Pre-select**: during another player's turn, action buttons are clickable. Clicking sets `preSelectedAction`. `_checkPreSelectTrigger()` fires the action when the turn switches to me.
+- **Card animation fix**: `_prev = { dealer, hands[] }` tracks rendered card counts. Only cards at index ≥ previous count receive `.card-enter`. Reset on IDLE.
+- **Bet countdown bar**: `updateBetTimer(state)` animates via `requestAnimationFrame` using `state.betDeadline`. Colors: violet → amber (<50%) → red (<25%).
+- **Strategy feedback**: client-side only, same as solo. `checkActionFeedback()` compares chosen vs `Strategy.getAction()`.
+
+### `js/game-solo.js` (standalone solo)
+Original game logic (FSM, shoe, all actions). Loads only in `solo.html`. No WebSocket.
+
+## WebSocket protocol
+
+### Client → Server
+```js
+{ type: 'join',      pseudo }
+{ type: 'bet',       amount }
+{ type: 'clearBet' }
+{ type: 'action',    action }   // 'hit'|'stand'|'double'|'split'|'surrender'
+{ type: 'insurance', take: bool }
+{ type: 'shuffle' }
+```
+
+### Server → Client
+```js
+{ type: 'welcome', pseudo, balance }   // unicast on join
+{ type: 'state',   state }             // broadcast after every mutation
+{ type: 'error',   message }           // unicast on invalid action
+```
+
+### State shape
+```js
+{
+  phase:           'IDLE|DEALING|INSURANCE|PLAYER_TURN|DEALER_TURN|RESOLVING',
+  betDeadline:     1234567890,   // epoch ms, null outside IDLE
+  shoe:            { remaining: 312, runningCount: 0 },
+  players: [{
+    pseudo, balance, bet, insuranceBet,
+    hands,           // [{ cards, bet, doubled, isAceSplit, fromSplit, surrendered, done }]
+    activeHandIdx, splitCount, seatIndex, connected,
+  }],
+  activePlayerIdx: 0,
+  dealerCards:     [],
+  seedJpeg:        null,   // base64 lava-lamp frame during shuffle
+}
+```
 
 ## Key rules implemented
 
@@ -41,6 +120,6 @@ Three IIFEs loaded in order via `<script>` tags:
 
 ## Determinoss integration
 
-The `/seed` endpoint returns `{ seed: "<hex>", age_ms, frame_jpeg? }`. The seed drives the sfc32 PRNG for the shoe shuffle. `frame_jpeg` (base64) is displayed as a lava-lamp overlay during shuffle. Without a token, `frame_jpeg` is unavailable but the seed endpoint still works (no authentication required for the seed itself, only for the frame).
+The `/seed` endpoint returns `{ seed: "<hex>", age_ms, frame_jpeg? }`. The seed drives the sfc32 PRNG for the shoe shuffle. `frame_jpeg` (base64) is broadcast in `state.seedJpeg` during shuffle.
 
-Token loading priority: `token.txt` (fetched at runtime, gitignored) → `window.Config.DETERMINOSS_TOKEN` (in `config.js`, also should not be committed with a real token).
+Token loading priority (server-side): `token.txt` → `DETERMINOSS_TOKEN` env var.

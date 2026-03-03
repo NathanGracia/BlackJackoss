@@ -1,2 +1,18 @@
-.env
+# Dependencies
+node_modules/
+
+# Secrets
 token.txt
+.env
+
+# Balances (données runtime, pas à committer)
+data/balances.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp

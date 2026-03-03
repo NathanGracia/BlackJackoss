@@ -1,0 +1,10 @@
+services:
+  blackjackoss:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DETERMINOSS_TOKEN=${DETERMINOSS_TOKEN:-}
+    restart: unless-stopped
