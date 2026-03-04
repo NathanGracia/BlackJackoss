@@ -2,7 +2,8 @@
 
 const https       = require('https');
 const http        = require('http');
-const persistence = require('./persistence');
+const db           = require('./db');
+const { checkAchievements } = require('./achievements-def');
 
 // ─── constants ────────────────────────────────────────────────────────────────
 const NUM_DECKS     = 6;
@@ -17,7 +18,8 @@ const BET_WINDOW_MS = 8000;  // betting window before auto-deal
 const PHASE = { IDLE:'IDLE', DEALING:'DEALING', INSURANCE:'INSURANCE',
                 PLAYER_TURN:'PLAYER_TURN', DEALER_TURN:'DEALER_TURN', RESOLVING:'RESOLVING' };
 
-const PLAYER_TURN_MS = 10000; // auto-stand after 10s
+const PLAYER_TURN_MS  = 10000; // auto-stand after 10s
+const INSURANCE_MS    = 8000;  // auto no-insurance after 8s
 
 // ─── sfc32 PRNG ───────────────────────────────────────────────────────────────
 function _makeSfc32(a, b, c, d) {
@@ -87,18 +89,28 @@ let state = {
   players:         [],
   activePlayerIdx: 0,
   dealerCards:     [],
-  betDeadline:     null,  // epoch ms — end of betting window
-  resolveDeadline: null,  // epoch ms — end of resolving phase
-  playerDeadline:  null,  // epoch ms — end of current player's turn
+  betDeadline:      null,  // epoch ms — end of betting window
+  resolveDeadline:  null,  // epoch ms — end of resolving phase
+  playerDeadline:   null,  // epoch ms — end of current player's turn
+  insuranceDeadline:null,  // epoch ms — end of insurance decision window
 };
 
-let _betTimerHandle    = null;
-let _playerTimerHandle = null;
+let _betTimerHandle       = null;
 
-let _broadcastFn = null;  // injected by server.js
+function _clearBetTimer() {
+  clearTimeout(_betTimerHandle);
+  _betTimerHandle  = null;
+  state.betDeadline = null;
+}
+let _playerTimerHandle    = null;
+let _insuranceTimerHandle = null;
+
+let _broadcastFn    = null;  // injected by server.js
+let _achievementFn  = null;  // injected by server.js — unicast(pseudo, msg)
 let _seedJpeg    = null;  // last frame_jpeg from Determinoss (for broadcast)
 
-function setBroadcastFn(fn) { _broadcastFn = fn; }
+function setBroadcastFn(fn)   { _broadcastFn   = fn; }
+function setAchievementFn(fn) { _achievementFn = fn; }
 
 function broadcast() {
   if (_broadcastFn) _broadcastFn(buildPublicState());
@@ -107,21 +119,25 @@ function broadcast() {
 function buildPublicState() {
   return {
     phase:           state.phase,
-    betDeadline:     state.betDeadline,
-    resolveDeadline: state.resolveDeadline,
-    playerDeadline:  state.playerDeadline,
+    betDeadline:      state.betDeadline,
+    resolveDeadline:  state.resolveDeadline,
+    playerDeadline:   state.playerDeadline,
+    insuranceDeadline:state.insuranceDeadline,
     shoe:  { remaining: state.shoe.length, runningCount: state.runningCount },
     players: state.players.map(p => ({
       pseudo:       p.pseudo,
       balance:      p.balance,
       bet:          p.bet,
-      insuranceBet: p.insuranceBet,
-      hands:        p.hands,
+      insuranceBet:     p.insuranceBet,
+      insuranceDecided: p._insuranceDecided,
+      hands:            p.hands,
       activeHandIdx:p.activeHandIdx,
       splitCount:   p.splitCount,
       seatIndex:    p.seatIndex,
       connected:    p.connected,
       readyToDeal:  p.bet > 0,
+      autoBet:      p.autoBet,
+      skin:         p.skin,
     })),
     activePlayerIdx: state.activePlayerIdx,
     dealerCards:     state.dealerCards,
@@ -181,12 +197,13 @@ function playerJoin(pseudo) {
   if (p) {
     p.connected = true;
   } else {
-    const balance = persistence.getBalance(pseudo);
+    const balance = db.getBalance(pseudo);
     p = {
       pseudo, balance, bet: 0, insuranceBet: 0,
       hands: [], activeHandIdx: 0, splitCount: 0,
       seatIndex: state.players.length,
       connected: true, readyToDeal: false,
+      autoBet: false, lastBet: 5, skin: '',
     };
     state.players.push(p);
   }
@@ -259,6 +276,38 @@ function playerClearBet(pseudo) {
   return {};
 }
 
+const VALID_SKINS = new Set(['','theme-fire','theme-volcano','theme-kaleidoscope','theme-underdog','theme-zen','theme-veteran','theme-pain','theme-legend','theme-streak','theme-vip','theme-gold','theme-ashes','theme-divine']);
+function playerSetSkin(pseudo, skin) {
+  const p = getPlayer(pseudo);
+  console.log('[playerSetSkin]', pseudo, skin, '| found:', !!p, '| valid:', VALID_SKINS.has(skin));
+  if (!p || !VALID_SKINS.has(skin)) return;
+  p.skin = skin;
+  broadcast();
+}
+
+function playerSetAutoBet(pseudo, enabled) {
+  const p = getPlayer(pseudo);
+  if (!p) return;
+  p.autoBet = !!enabled;
+  if (state.phase === PHASE.IDLE) _checkAllAutoAndSkip();
+  else broadcast();
+}
+
+function _checkAllAutoAndSkip() {
+  if (state.phase !== PHASE.IDLE) return;
+  const connected = state.players.filter(p => p.connected);
+  if (connected.length === 0) return;
+  if (!connected.every(p => p.autoBet)) return;
+  // All players on auto — apply last bets and skip the window
+  _clearBetTimer();
+  connected.forEach(p => {
+    if (p.balance > 0) p.bet = Math.min(p.lastBet, p.balance);
+  });
+  if (!connected.some(p => p.bet > 0)) { _startBetTimer(); return; } // nobody can bet
+  broadcast();
+  setTimeout(() => _autoDeal().catch(console.error), 400);
+}
+
 // ─── token ────────────────────────────────────────────────────────────────────
 let _dealToken = '';
 function setToken(t) { _dealToken = t; }
@@ -311,6 +360,7 @@ async function playerInsurance(pseudo, take) {
 
 async function _continueAfterInsurance() {
   if (state.phase !== PHASE.INSURANCE) return;
+  _clearInsuranceTimer();
   const active = state.players.filter(pl => pl.hands.length > 0);
 
   const dealerBJ = _dealerHasBJ(state.dealerCards);
@@ -354,6 +404,31 @@ function _onPlayerTimerFired() {
     broadcast();
     _advanceHand(p);
   }
+}
+
+// ─── insurance timer ──────────────────────────────────────────────────────────
+function _startInsuranceTimer() {
+  clearTimeout(_insuranceTimerHandle);
+  state.insuranceDeadline = Date.now() + INSURANCE_MS;
+  _insuranceTimerHandle   = setTimeout(_onInsuranceTimerFired, INSURANCE_MS);
+}
+
+function _clearInsuranceTimer() {
+  clearTimeout(_insuranceTimerHandle);
+  _insuranceTimerHandle    = null;
+  state.insuranceDeadline  = null;
+}
+
+async function _onInsuranceTimerFired() {
+  if (state.phase !== PHASE.INSURANCE) return;
+  // Auto no-insurance for all players who haven't decided yet
+  state.players.forEach(p => {
+    if (p.hands.length > 0 && !p._insuranceDecided) {
+      p._insuranceDecided = true;
+    }
+  });
+  _clearInsuranceTimer();
+  await _continueAfterInsurance();
 }
 
 // ─── player turn ──────────────────────────────────────────────────────────────
@@ -471,12 +546,22 @@ function actionSplit(pseudo) {
   const h2 = { cards:[hand.cards[1]], bet:hand.bet, doubled:false, isAceSplit:isAce, fromSplit:true, surrendered:false, done:false };
   h1.cards.push(dealCard());
   h2.cards.push(dealCard());
-  if (isAce) { h1.done = true; h2.done = true; }
+
+  // Auto-done: ace splits (1 card only) + any hand that immediately hits 21
+  const { total: t1 } = getHandTotal(h1.cards, false);
+  const { total: t2 } = getHandTotal(h2.cards, false);
+  if (isAce || t1 === 21) h1.done = true;
+  if (isAce || t2 === 21) h2.done = true;
+
   p.hands.splice(p.activeHandIdx, 1, h1, h2);
-  if (isAce) {
-    _advanceHand(p); // handles timer for next player
+
+  if (h1.done) {
+    // h1 auto-done — broadcast split result, then advance to h2 (or end round)
+    broadcast();
+    _advanceHand(p);
   } else {
-    _startPlayerTimer(); // player plays first split hand
+    // Start timer first so playerDeadline is included in the broadcast
+    _startPlayerTimer();
     broadcast();
   }
   return {};
@@ -523,6 +608,87 @@ async function _enterDealerTurn() {
   _enterResolving();
 }
 
+// ─── achievement processing ───────────────────────────────────────────────────
+function _processAchievements(p, dealerBust) {
+  if (!_achievementFn) return;
+
+  const stats = db.getStats(p.pseudo);
+  if (!stats) return;
+
+  const delta = {
+    hands_played:   0, hands_won: 0, hands_lost: 0,
+    blackjacks:     0, surrenders: 0, all_ins: 0, all_in_wins: 0,
+    doubles_won:    0, splits4_done: 0, splits4_won: 0, small_hand_wins: 0,
+  };
+
+  const wasAllIn   = p._wasAllIn;   // set in _autoDeal
+  let   roundWon   = false;
+  let   roundLost  = false;
+  const isSplit4   = p.hands.length === 4;
+  let   allSplit4Won = isSplit4;
+
+  p.hands.forEach(hand => {
+    if (hand.surrendered) { delta.surrenders++; roundLost = true; return; }
+    const { total: pt } = getHandTotal(hand.cards, false);
+    const bust = pt > 21;
+    const bj   = isBlackjack(hand.cards) && !hand.fromSplit;
+    const won  = hand.net > 0;
+    const lost = hand.net < 0;
+
+    if (bj)  delta.blackjacks++;
+    if (won) {
+      delta.hands_won++;
+      roundWon = true;
+      if (hand.doubled)              delta.doubles_won++;
+      if (wasAllIn)                  delta.all_in_wins++;
+      if (!isSplit4 && pt <= 12)     delta.small_hand_wins++;
+      if (isSplit4 && !won)          allSplit4Won = false;
+    } else {
+      if (isSplit4) allSplit4Won = false;
+    }
+    if (lost) { delta.hands_lost++; roundLost = true; }
+  });
+
+  delta.hands_played = 1;
+  if (wasAllIn) delta.all_ins++;
+  if (isSplit4) delta.splits4_done++;
+  if (isSplit4 && allSplit4Won) delta.splits4_won++;
+
+  // Streaks (replace, not additive)
+  const newWinStreak = roundWon && !roundLost
+    ? (stats.win_streak || 0) + 1 : 0;
+  const newAllInStreak = wasAllIn
+    ? (stats.consecutive_all_ins || 0) + 1 : 0;
+
+  db.updateStats(p.pseudo, {
+    ...delta,
+    win_streak:          newWinStreak,
+    consecutive_all_ins: newAllInStreak,
+  });
+
+  const fresh = db.getStats(p.pseudo);
+  const candidates = checkAchievements(fresh, { balance: p.balance });
+
+  for (const ach of candidates) {
+    const isNew = db.unlockAchievement(p.pseudo, ach.id);
+    if (!isNew) continue;
+
+    // Credit balance reward
+    if (ach.reward.type === 'balance') {
+      p.balance += ach.reward.value;
+      db.setBalance(p.pseudo, p.balance);
+    }
+
+    _achievementFn(p.pseudo, { type: 'achievement_unlocked', achievement: {
+      id:     ach.id,
+      name:   ach.name,
+      desc:   ach.desc,
+      icon:   ach.icon,
+      reward: ach.reward,
+    }});
+  }
+}
+
 // ─── resolving ────────────────────────────────────────────────────────────────
 const RESOLVE_MS = 4000;
 
@@ -545,28 +711,32 @@ function _enterResolving() {
 
     p.hands.forEach(hand => {
       if (hand.surrendered) {
-        p.balance += Math.floor(hand.bet / 2); // get back half
+        const back = Math.floor(hand.bet / 2);
+        p.balance += back;
+        hand.net = -(hand.bet - back); // lose half
         return;
       }
       const { total: pt } = getHandTotal(hand.cards, false);
       const bust = pt > 21;
       const bj   = isBlackjack(hand.cards) && !hand.fromSplit;
 
-      if (bust) return; // lose, nothing back
+      if (bust) { hand.net = -hand.bet; return; } // lose, nothing back
 
       if (bj && !dealerBJ) {
-        p.balance += hand.bet + Math.floor(hand.bet * 1.5); // 3:2
+        const profit = Math.floor(hand.bet * 1.5);
+        p.balance += hand.bet + profit; // 3:2
+        hand.net = profit;
         return;
       }
-      if (bj && dealerBJ) { p.balance += hand.bet; return; } // push
-      if (dealerBJ) return; // lose
-      if (dealerBust) { p.balance += hand.bet * 2; return; }
-      if (pt > dt)  { p.balance += hand.bet * 2; return; }
-      if (pt === dt){ p.balance += hand.bet; return; }
-      // pt < dt → lose
+      if (bj && dealerBJ) { p.balance += hand.bet; hand.net = 0; return; } // push
+      if (dealerBJ) { hand.net = -hand.bet; return; } // lose
+      if (dealerBust || pt > dt) { p.balance += hand.bet * 2; hand.net = hand.bet; return; }
+      if (pt === dt) { p.balance += hand.bet; hand.net = 0; return; }
+      hand.net = -hand.bet; // pt < dt
     });
 
-    persistence.setBalance(p.pseudo, p.balance);
+    db.setBalance(p.pseudo, p.balance);
+    _processAchievements(p, dealerBust);
   });
 
   broadcast();
@@ -577,6 +747,7 @@ function _enterResolving() {
 // ─── idle + bet timer ─────────────────────────────────────────────────────────
 function _enterIdle() {
   _clearPlayerTimer();
+  _clearInsuranceTimer();
   state.phase = PHASE.IDLE;
   state.resolveDeadline = null;
   // Remove players who disconnected during the game
@@ -584,13 +755,20 @@ function _enterIdle() {
   // Recompact seat indices
   state.players.forEach((p, i) => {
     p.seatIndex = i;
+    if (p.bet > 0) p.lastBet = p.bet;  // save before clearing
     p.bet = 0; p.hands = []; p.activeHandIdx = 0; p.splitCount = 0;
     p._insuranceDecided = false;
   });
   state.dealerCards     = [];
   state.activePlayerIdx = 0;
-  if (state.players.length > 0) _startBetTimer();
-  else { state.betDeadline = null; broadcast(); }
+  if (state.players.length === 0) { state.betDeadline = null; broadcast(); return; }
+  const connected = state.players.filter(p => p.connected);
+  const allAuto = connected.length > 0 && connected.every(p => p.autoBet);
+  if (allAuto) {
+    _checkAllAutoAndSkip();
+  } else {
+    _startBetTimer();
+  }
 }
 
 function _startBetTimer() {
@@ -627,6 +805,7 @@ async function _autoDeal() {
 
   state.players.forEach(p => {
     if (p.bet > 0 && p.connected) {
+      p._wasAllIn = p.balance === p.bet; // all chips are in the bet
       p.balance -= p.bet;
       p.hands = [{ cards:[], bet: p.bet, doubled:false, isAceSplit:false, fromSplit:false, surrendered:false, done:false }];
       p.activeHandIdx = 0;
@@ -649,6 +828,7 @@ async function _autoDeal() {
   if (dealerUp.rank === 'A') {
     state.phase = PHASE.INSURANCE;
     active.forEach(p => p._insuranceDecided = false);
+    _startInsuranceTimer();
     broadcast();
     return;
   }
@@ -672,6 +852,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 module.exports = {
   setBroadcastFn,
+  setAchievementFn,
   buildPublicState,
   initShoe,
   setToken,
@@ -679,6 +860,8 @@ module.exports = {
   playerDisconnect,
   playerBet,
   playerClearBet,
+  playerSetAutoBet,
+  playerSetSkin,
   playerInsurance,
   actionHit,
   actionStand,

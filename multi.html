@@ -9,6 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="achievements.css" />
 </head>
 <body>
   <!-- ═══════════════════ JOIN SCREEN ═══════════════════ -->
@@ -62,6 +63,16 @@
 
     <a class="back-btn" href="/">← Menu</a>
 
+    <button class="achievements-btn" id="btn-achievements">🏆 <span class="ach-btn-count">0</span></button>
+    <button class="skins-btn" id="btn-skins">🎨 Skins</button>
+
+    <label class="tooltip-toggle" id="tooltip-toggle" title="Tooltips">
+      <span class="tooltip-toggle-label">Tips</span>
+      <span class="tooltip-toggle-track">
+        <span class="tooltip-toggle-thumb"></span>
+      </span>
+    </label>
+
     <div class="header-balance"
          data-tooltip="Votre bankroll.&#10;&#10;Déduite au DEAL, mise à jour&#10;à la fin de chaque tour.&#10;Commence à $1 000."
          data-tp="below-left">
@@ -105,7 +116,8 @@
 
       <!-- Shoe bar -->
       <div class="shoe-section">
-        <div class="shoe-bar-wrap">
+        <div class="shoe-bar-wrap"
+             data-tooltip="Sabot — 6 jeux de 52 cartes mélangés.&#10;La barre représente les cartes restantes.&#10;&#10;▎ Marqueur ambré = cut card (25%).&#10;  Quand le sabot atteint ce seuil,&#10;  il est remélangé au prochain tour.">
           <div class="shoe-bar" id="shoe-bar">
             <div class="shoe-fill" id="shoe-fill"></div>
             <div class="shoe-cut-marker" id="shoe-cut-marker"></div>
@@ -143,10 +155,14 @@
           <button class="chip" data-amount="25">$25</button>
           <button class="chip" data-amount="100">$100</button>
           <button class="chip" data-amount="500">$500</button>
+          <button class="chip chip-allin" id="btn-allin"
+                  data-tooltip="Mise toute votre balance.">ALL IN</button>
           <button class="chip chip-clear" id="btn-clear-bet"
                   data-tooltip="Réinitialise la mise à $0.">CLR</button>
           <button class="chip chip-auto" id="btn-auto-bet"
-                  data-tooltip="Auto-mise minimum ($5) au début&#10;de chaque tour — économise un clic&#10;par main en session longue.&#10;&#10;Actif = vert · Inactif = gris.">AUTO</button>
+                  data-tooltip="Rejoue automatiquement la dernière mise&#10;au début de chaque tour.&#10;&#10;Actif = vert · Inactif = gris.">AUTO</button>
+          <button class="chip chip-auto" id="btn-never-insurance"
+                  data-tooltip="Refuse automatiquement l'assurance&#10;à chaque tour.&#10;&#10;Recommandé : l'assurance est&#10;désavantageuse sauf TC ≥ +3.&#10;&#10;Actif = vert · Inactif = gris.">NO INS</button>
         </div>
       </div>
 
@@ -237,8 +253,51 @@
   </main>
 
   <!-- ═══════════════════ SCRIPTS ═══════════════════ -->
+  <script>
+    (function() {
+      const KEY = 'bj-tooltips';
+      const enabled = localStorage.getItem(KEY) !== 'off';
+      if (!enabled) document.body.classList.add('no-tooltips');
+      document.addEventListener('DOMContentLoaded', function() {
+        const lbl = document.getElementById('tooltip-toggle');
+        if (!lbl) return;
+        lbl.classList.toggle('active', document.body.classList.contains('no-tooltips') === false);
+        lbl.addEventListener('click', function() {
+          const on = document.body.classList.toggle('no-tooltips') === false;
+          lbl.classList.toggle('active', on);
+          localStorage.setItem(KEY, on ? 'on' : 'off');
+        });
+      });
+    })();
+  </script>
+  <script>
+    // Achievement definitions (mirrors server/achievements-def.js)
+    window._ALL_ACHIEVEMENTS = [
+      { id:'first_allin',     name:'Tout ou Rien',       desc:'Faire un All In pour la première fois',          icon:'🔥', reward:{type:'skin',    value:'theme-fire'} },
+      { id:'allin_win',       name:'All In Hero',         desc:'Remporter un All In',                            icon:'💰', reward:{type:'balance', value:500} },
+      { id:'allin_streak_3',  name:'Triple Fougue',       desc:'Faire All In 3 fois de suite',                   icon:'🌋', reward:{type:'skin',    value:'theme-volcano'} },
+      { id:'first_blackjack', name:'Natural',             desc:'Obtenir un Blackjack naturel',                   icon:'⚡', reward:{type:'balance', value:300} },
+      { id:'split_4',         name:'Quatuor',             desc:'Splitter jusqu\'à 4 mains en un tour',           icon:'🃏', reward:{type:'skin',    value:'theme-kaleidoscope'} },
+      { id:'split_4_win',     name:'Maître du Split',     desc:'Gagner avec les 4 mains splittées',              icon:'👑', reward:{type:'balance', value:1000} },
+      { id:'small_hand_win',  name:'David vs Goliath',    desc:'Gagner avec une main de 12 ou moins',            icon:'🐛', reward:{type:'skin',    value:'theme-underdog'} },
+      { id:'first_surrender', name:'Retraite Tactique',   desc:'Surrenderer une main pour la première fois',     icon:'🏳️', reward:{type:'skin',    value:'theme-zen'} },
+      { id:'hands_100',       name:'Habitué',             desc:'Jouer 100 mains',                                icon:'🎯', reward:{type:'balance', value:200} },
+      { id:'hands_500',       name:'Vétéran',             desc:'Jouer 500 mains',                                icon:'🎖️', reward:{type:'skin',    value:'theme-veteran'} },
+      { id:'losses_500',      name:'Masochiste',          desc:'Perdre 500 mains',                               icon:'💀', reward:{type:'skin',    value:'theme-pain'} },
+      { id:'hands_1000',      name:'Légende',             desc:'Jouer 1 000 mains',                              icon:'🌟', reward:{type:'skin',    value:'theme-legend'} },
+      { id:'win_streak_5',    name:'En Feu',              desc:'5 victoires consécutives',                       icon:'🔥', reward:{type:'balance', value:250} },
+      { id:'win_streak_10',   name:'Inarrêtable',         desc:'10 victoires consécutives',                      icon:'⚡', reward:{type:'skin',    value:'theme-streak'} },
+      { id:'balance_5000',    name:'High Roller',         desc:'Atteindre $5 000 de balance',                    icon:'💎', reward:{type:'skin',    value:'theme-vip'} },
+      { id:'balance_10000',   name:'Millionnaire',        desc:'Atteindre $10 000 de balance',                   icon:'🏆', reward:{type:'skin',    value:'theme-gold'} },
+      { id:'broke',           name:'Rock Bottom',         desc:'Tomber à $0 de balance',                         icon:'💸', reward:{type:'skin',    value:'theme-ashes'} },
+      { id:'doubles_won_10',  name:'Parieur Audacieux',   desc:'Gagner 10 doubles down',                         icon:'✌️', reward:{type:'balance', value:500} },
+      { id:'blackjack_10',    name:'Favori des Dieux',    desc:'Obtenir 10 Blackjacks',                          icon:'✨', reward:{type:'skin',    value:'theme-divine'} },
+    ];
+  </script>
   <script src="js/config.js"></script>
   <script src="js/strategy.js"></script>
+  <script src="js/sounds.js"></script>
+  <script src="js/achievements-client.js"></script>
   <script src="js/game.js"></script>
   </div><!-- /game-wrapper -->
 </body>
