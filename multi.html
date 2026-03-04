@@ -7,7 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -60,14 +60,6 @@
             data-tooltip="Force un nouveau sabot mélangé&#10;avec une seed fraîche depuis Determinoss."
             data-tp="below">⟳ SHUFFLE</button>
 
-    <button class="mode-toggle"
-            data-tooltip="SIMPLE : stratégie de base uniquement.&#10;         RC / TC / sabots masqués.&#10;&#10;HARD   : affiche le comptage complet&#10;         (RC, TC, sabots, shoe bar)."
-            data-tp="below"
-            id="mode-toggle">
-      <span class="mode-toggle-pip" id="mode-pip"></span>
-      <span id="mode-label">SIMPLE</span>
-    </button>
-
     <a class="back-btn" href="/">← Menu</a>
 
     <div class="header-balance"
@@ -97,6 +89,11 @@
         <div class="area-label">DEALER</div>
         <div class="cards-row" id="dealer-cards"></div>
         <div class="score-display" id="dealer-score">—</div>
+        <div class="resolve-timer-wrap" id="resolve-timer-wrap" hidden>
+          <div class="resolve-timer-track">
+            <div class="resolve-timer-bar" id="resolve-timer-bar"></div>
+          </div>
+        </div>
       </div>
 
       <!-- Seed image overlay -->
@@ -117,13 +114,8 @@
         </div>
       </div>
 
-      <!-- Table seats — tous les joueurs côte à côte -->
+      <!-- Arc table: all players (full cards for me, compact for others) -->
       <div class="table-seats" id="table-seats"></div>
-
-      <!-- My hands (full size, only when playing) -->
-      <div class="player-area" id="player-area" hidden>
-        <div class="hands-container" id="hands-container"></div>
-      </div>
 
       <!-- Pre-select hint -->
       <div class="preselect-hint" id="preselect-hint" hidden>

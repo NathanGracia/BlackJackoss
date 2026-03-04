@@ -17,6 +17,8 @@ const BET_WINDOW_MS = 8000;  // betting window before auto-deal
 const PHASE = { IDLE:'IDLE', DEALING:'DEALING', INSURANCE:'INSURANCE',
                 PLAYER_TURN:'PLAYER_TURN', DEALER_TURN:'DEALER_TURN', RESOLVING:'RESOLVING' };
 
+const PLAYER_TURN_MS = 10000; // auto-stand after 10s
+
 // ─── sfc32 PRNG ───────────────────────────────────────────────────────────────
 function _makeSfc32(a, b, c, d) {
   return () => {
@@ -79,16 +81,19 @@ function _fetchJson(url) {
 
 // ─── state ────────────────────────────────────────────────────────────────────
 let state = {
-  phase:          PHASE.IDLE,
-  shoe:           [],
-  runningCount:   0,
-  players:        [],
+  phase:           PHASE.IDLE,
+  shoe:            [],
+  runningCount:    0,
+  players:         [],
   activePlayerIdx: 0,
-  dealerCards:    [],
-  betDeadline:    null,   // epoch ms — end of betting window (null = no active timer)
+  dealerCards:     [],
+  betDeadline:     null,  // epoch ms — end of betting window
+  resolveDeadline: null,  // epoch ms — end of resolving phase
+  playerDeadline:  null,  // epoch ms — end of current player's turn
 };
 
-let _betTimerHandle = null;
+let _betTimerHandle    = null;
+let _playerTimerHandle = null;
 
 let _broadcastFn = null;  // injected by server.js
 let _seedJpeg    = null;  // last frame_jpeg from Determinoss (for broadcast)
@@ -101,8 +106,10 @@ function broadcast() {
 
 function buildPublicState() {
   return {
-    phase:       state.phase,
-    betDeadline: state.betDeadline,
+    phase:           state.phase,
+    betDeadline:     state.betDeadline,
+    resolveDeadline: state.resolveDeadline,
+    playerDeadline:  state.playerDeadline,
     shoe:  { remaining: state.shoe.length, runningCount: state.runningCount },
     players: state.players.map(p => ({
       pseudo:       p.pseudo,
@@ -129,6 +136,10 @@ async function initShoe(token) {
   try {
     const url  = token ? `${SEED_URL}?token=${encodeURIComponent(token)}` : SEED_URL;
     const json = await _fetchJson(url);
+    if (!json || !json.seed) {
+      console.warn('[Shoe] Unexpected API response:', JSON.stringify(json));
+      throw new Error('No seed field in response');
+    }
     rng = _rngFromHex(json.seed);
     if (json.frame_jpeg) _seedJpeg = json.frame_jpeg;
     console.info(`[Shoe] seed ${json.seed.slice(0,16)}…`);
@@ -185,8 +196,42 @@ function playerJoin(pseudo) {
 }
 
 function playerDisconnect(pseudo) {
-  const p = state.players.find(pl => pl.pseudo === pseudo);
-  if (p) p.connected = false;
+  const idx = state.players.findIndex(pl => pl.pseudo === pseudo);
+  if (idx === -1) return;
+  const p = state.players[idx];
+
+  // IDLE: remove immediately — no ongoing game, clean exit
+  if (state.phase === PHASE.IDLE) {
+    state.players.splice(idx, 1);
+    state.players.forEach((pl, i) => { pl.seatIndex = i; });
+    broadcast();
+    return;
+  }
+
+  // Mid-game: mark disconnected, will be removed at next IDLE
+  p.connected = false;
+  if (!p._insuranceDecided) p._insuranceDecided = true; // auto no-insurance
+  broadcast();
+
+  // Unblock PLAYER_TURN: auto-stand so the game doesn't freeze
+  if (state.phase === PHASE.PLAYER_TURN &&
+      state.players[state.activePlayerIdx]?.pseudo === pseudo) {
+    const hand = p.hands[p.activeHandIdx];
+    if (hand && !hand.done) {
+      _clearPlayerTimer();
+      hand.done = true;
+      _advanceHand(p);
+    }
+  }
+
+  // Unblock INSURANCE: if all remaining connected players have now decided, proceed
+  if (state.phase === PHASE.INSURANCE) {
+    const active = state.players.filter(pl => pl.hands.length > 0 && pl.connected);
+    if (active.length === 0) { _enterResolving(); return; }
+    if (active.every(pl => pl._insuranceDecided)) {
+      _continueAfterInsurance().catch(console.error);
+    }
+  }
 }
 
 function getPlayer(pseudo) {
@@ -256,30 +301,59 @@ async function playerInsurance(pseudo, take) {
     }
   }
 
-  // Check if all active players have decided
+  // Check if all connected active players have decided
   const active = state.players.filter(pl => pl.hands.length > 0 && pl.connected);
-  const allDecided = active.every(pl => pl._insuranceDecided);
-  if (!allDecided) { broadcast(); return {}; }
+  if (!active.every(pl => pl._insuranceDecided)) { broadcast(); return {}; }
 
-  // All decided: peek dealer
+  await _continueAfterInsurance();
+  return {};
+}
+
+async function _continueAfterInsurance() {
+  if (state.phase !== PHASE.INSURANCE) return;
+  const active = state.players.filter(pl => pl.hands.length > 0);
+
   const dealerBJ = _dealerHasBJ(state.dealerCards);
   if (dealerBJ) {
     revealCard(state.dealerCards[1]);
     broadcast();
     await sleep(400);
     _enterResolving();
-    return {};
+    return;
   }
 
-  // No dealer BJ — continue
-  // Check if any player has BJ
+  // No dealer BJ — mark BJ hands as done, then player turns
   active.forEach(pl => {
     if (isBlackjack(pl.hands[0].cards)) pl.hands[0].done = true;
   });
-
   broadcast();
   _enterPlayerTurn();
-  return {};
+}
+
+// ─── player turn timer ────────────────────────────────────────────────────────
+function _startPlayerTimer() {
+  clearTimeout(_playerTimerHandle);
+  state.playerDeadline = Date.now() + PLAYER_TURN_MS;
+  _playerTimerHandle   = setTimeout(_onPlayerTimerFired, PLAYER_TURN_MS);
+}
+
+function _clearPlayerTimer() {
+  clearTimeout(_playerTimerHandle);
+  _playerTimerHandle  = null;
+  state.playerDeadline = null;
+}
+
+function _onPlayerTimerFired() {
+  if (state.phase !== PHASE.PLAYER_TURN) return;
+  const p = state.players[state.activePlayerIdx];
+  if (!p) return;
+  const hand = p.hands[p.activeHandIdx];
+  if (hand && !hand.done) {
+    state.playerDeadline = null;
+    hand.done = true;
+    broadcast();
+    _advanceHand(p);
+  }
 }
 
 // ─── player turn ──────────────────────────────────────────────────────────────
@@ -288,6 +362,7 @@ function _enterPlayerTurn() {
   // Find first active player with undone hands
   const idx = state.players.findIndex(p => p.hands.length > 0 && p.hands.some(h => !h.done));
   if (idx === -1) {
+    _clearPlayerTimer();
     _enterDealerTurn();
     return;
   }
@@ -295,6 +370,7 @@ function _enterPlayerTurn() {
   // Find first undone hand for that player
   const p = state.players[idx];
   p.activeHandIdx = p.hands.findIndex(h => !h.done);
+  _startPlayerTimer();
   broadcast();
 }
 
@@ -303,6 +379,7 @@ function _advanceHand(player) {
   const nextIdx = player.hands.findIndex((h, i) => i > player.activeHandIdx && !h.done);
   if (nextIdx !== -1) {
     player.activeHandIdx = nextIdx;
+    _startPlayerTimer();
     broadcast();
     return;
   }
@@ -318,8 +395,10 @@ function _advanceHand(player) {
   if (nextPlayerIdx !== -1) {
     state.activePlayerIdx = nextPlayerIdx;
     state.players[nextPlayerIdx].activeHandIdx = state.players[nextPlayerIdx].hands.findIndex(h => !h.done);
+    _startPlayerTimer();
     broadcast();
   } else {
+    _clearPlayerTimer();
     _enterDealerTurn();
   }
 }
@@ -337,10 +416,12 @@ function actionHit(pseudo) {
   const v = _validateAction(pseudo);
   if (v.error) return v;
   const { p, hand } = v;
+  _clearPlayerTimer();
 
   hand.cards.push(dealCard());
   const { total, isBust } = getHandTotal(hand.cards);
   if (isBust || total === 21) hand.done = true;
+  if (!hand.done) _startPlayerTimer(); // player still needs to decide
   broadcast();
   if (hand.done) _advanceHand(p);
   return {};
@@ -350,6 +431,7 @@ function actionStand(pseudo) {
   const v = _validateAction(pseudo);
   if (v.error) return v;
   const { p, hand } = v;
+  _clearPlayerTimer();
   hand.done = true;
   broadcast();
   _advanceHand(p);
@@ -362,6 +444,7 @@ function actionDouble(pseudo) {
   const { p, hand } = v;
   if (hand.cards.length !== 2) return { error: 'Double only on first 2 cards' };
   if (p.balance < hand.bet) return { error: 'Insufficient balance' };
+  _clearPlayerTimer();
   p.balance -= hand.bet;
   hand.bet   *= 2;
   hand.doubled = true;
@@ -380,6 +463,7 @@ function actionSplit(pseudo) {
   if (cardValue(hand.cards[0]) !== cardValue(hand.cards[1])) return { error: 'Not a pair' };
   if (p.balance < hand.bet) return { error: 'Insufficient balance' };
   if (p.splitCount >= 3) return { error: 'Max splits reached' };
+  _clearPlayerTimer();
   p.balance -= hand.bet;
   p.splitCount++;
   const isAce = cardValue(hand.cards[0]) === 11;
@@ -389,8 +473,12 @@ function actionSplit(pseudo) {
   h2.cards.push(dealCard());
   if (isAce) { h1.done = true; h2.done = true; }
   p.hands.splice(p.activeHandIdx, 1, h1, h2);
-  broadcast();
-  if (isAce) _advanceHand(p);
+  if (isAce) {
+    _advanceHand(p); // handles timer for next player
+  } else {
+    _startPlayerTimer(); // player plays first split hand
+    broadcast();
+  }
   return {};
 }
 
@@ -399,6 +487,7 @@ function actionSurrender(pseudo) {
   if (v.error) return v;
   const { p, hand } = v;
   if (hand.cards.length !== 2 || hand.fromSplit) return { error: 'Surrender not allowed' };
+  _clearPlayerTimer();
   hand.surrendered = true;
   hand.done = true;
   broadcast();
@@ -414,21 +503,32 @@ async function _enterDealerTurn() {
   broadcast();
   await sleep(400);
 
-  // S17 rule
-  while (true) {
-    const { total, isSoft } = getHandTotal(state.dealerCards, false);
-    if (total > 17 || (total === 17 && !isSoft)) break;
-    state.dealerCards.push(dealCard());
-    broadcast();
-    await sleep(350);
+  // Skip dealer play if all active hands are bust or surrendered
+  const activePlayers = state.players.filter(p => p.hands.length > 0);
+  const allResolved   = activePlayers.length > 0 && activePlayers.every(p =>
+    p.hands.every(h => h.surrendered || getHandTotal(h.cards, false).isBust)
+  );
+
+  if (!allResolved) {
+    // S17 rule
+    while (true) {
+      const { total, isSoft } = getHandTotal(state.dealerCards, false);
+      if (total > 17 || (total === 17 && !isSoft)) break;
+      state.dealerCards.push(dealCard());
+      broadcast();
+      await sleep(350);
+    }
   }
 
   _enterResolving();
 }
 
 // ─── resolving ────────────────────────────────────────────────────────────────
+const RESOLVE_MS = 4000;
+
 function _enterResolving() {
   state.phase = PHASE.RESOLVING;
+  state.resolveDeadline = Date.now() + RESOLVE_MS;
   const { total: dt } = getHandTotal(state.dealerCards, false);
   const dealerBust = dt > 21;
   const dealerBJ   = _dealerHasBJ(state.dealerCards);
@@ -471,19 +571,26 @@ function _enterResolving() {
 
   broadcast();
 
-  setTimeout(_enterIdle, 2000);
+  setTimeout(_enterIdle, RESOLVE_MS);
 }
 
 // ─── idle + bet timer ─────────────────────────────────────────────────────────
 function _enterIdle() {
+  _clearPlayerTimer();
   state.phase = PHASE.IDLE;
-  state.players.forEach(p => {
+  state.resolveDeadline = null;
+  // Remove players who disconnected during the game
+  state.players = state.players.filter(p => p.connected);
+  // Recompact seat indices
+  state.players.forEach((p, i) => {
+    p.seatIndex = i;
     p.bet = 0; p.hands = []; p.activeHandIdx = 0; p.splitCount = 0;
     p._insuranceDecided = false;
   });
-  state.dealerCards   = [];
+  state.dealerCards     = [];
   state.activePlayerIdx = 0;
-  _startBetTimer();
+  if (state.players.length > 0) _startBetTimer();
+  else { state.betDeadline = null; broadcast(); }
 }
 
 function _startBetTimer() {

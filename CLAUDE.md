@@ -47,9 +47,13 @@ Authoritative game logic:
 - **FSM phases**: `IDLE → DEALING → INSURANCE? → PLAYER_TURN → DEALER_TURN → RESOLVING`
 - **Auto-deal timer**: `BET_WINDOW_MS = 8000`. On entering IDLE, `_startBetTimer()` fires. At expiry: if any bet → `_autoDeal()`, else restart timer.
 - `betDeadline` (epoch ms) is included in every broadcast so clients can animate a countdown bar.
+- **Player turn timer**: `PLAYER_TURN_MS = 10000`. `_startPlayerTimer()` fires on each new turn (new player or new hand after split). Auto-stand via `_onPlayerTimerFired()` at expiry. `playerDeadline` (epoch ms) broadcast so clients animate the seat border.
+- **Resolve timer**: `RESOLVE_MS = 4000`. `resolveDeadline` set in `_enterResolving()`, cleared in `_enterIdle()`.
 - **Shoe**: 6-deck Fisher-Yates with sfc32 PRNG seeded by Determinoss `/seed`. Reshuffles when < 25% remains.
-- **Sequential turns**: `activePlayerIdx` points to the active player; `advanceHand()` moves to next undone hand, then next player, then dealer.
-- **Resolving**: payouts computed, `persistence.setBalance()` called per player, then `_enterIdle()` after 2s.
+- **Sequential turns**: `activePlayerIdx` points to the active player; `_advanceHand()` moves to next undone hand, then next player, then dealer.
+- **Dealer skip**: dealer does not draw if all active hands are bust or surrendered.
+- **Resolving**: payouts computed, `persistence.setBalance()` called per player, then `_enterIdle()` after 4s.
+- **Disconnect handling**: immediate removal in IDLE; auto-stand + `_clearPlayerTimer()` in PLAYER_TURN; auto insurance-decided in INSURANCE.
 
 ### `server/persistence.js`
 Reads/writes `data/balances.json` synchronously. Default balance: **$1000**.
@@ -68,12 +72,13 @@ Exposes `Strategy` object: `getAction()`, `getHandTotal()`, `getFullHandTotal()`
 WebSocket client + renderer for `multi.html`. Key behaviors:
 - Connects to `Config.WS_URL` on load. Reconnects on close.
 - **Join screen**: pseudo input → `{ type: 'join', pseudo }` → server replies `welcome` → table shown.
-- **`onState(state, prev)`**: called on every broadcast. Renders dealer, seats row, my hands, buttons, countdown bar, strategy highlight.
-- **`renderSeats(state)`**: all players displayed in a compact row (`#table-seats`). Active player gets `active-seat` class + `▶` indicator. My seat gets `my-seat` + `★`.
-- **Pre-select**: during another player's turn, action buttons are clickable. Clicking sets `preSelectedAction`. `_checkPreSelectTrigger()` fires the action when the turn switches to me.
+- **`onState(state, prev)`**: called on every broadcast. Renders dealer, seats row, buttons, all countdown bars.
+- **`renderSeats(state)`**: all players in arc layout (`#table-seats`). Active player gets `active-seat` + `▶`. My seat gets `my-seat` + `★`. Full cards for me, compact for others.
+- **Pre-select**: during another player's turn, action buttons are clickable only if I still have undone hands. Clicking sets `preSelectedAction`. `_checkPreSelectTrigger()` fires when turn switches to me.
 - **Card animation fix**: `_prev = { dealer, hands[] }` tracks rendered card counts. Only cards at index ≥ previous count receive `.card-enter`. Reset on IDLE.
-- **Bet countdown bar**: `updateBetTimer(state)` animates via `requestAnimationFrame` using `state.betDeadline`. Colors: violet → amber (<50%) → red (<25%).
-- **Strategy feedback**: client-side only, same as solo. `checkActionFeedback()` compares chosen vs `Strategy.getAction()`.
+- **Bet countdown bar**: `updateBetTimer(state)` animates via `requestAnimationFrame` using `state.betDeadline`. Colors: green → amber (<50%) → red (<25%).
+- **Resolve bar**: `updateResolveTimer(state)` animates a bar inside the dealer area using `state.resolveDeadline`.
+- **Player turn border**: `updatePlayerTimer(state)` updates `--player-timer-pct` and `--player-timer-color` CSS vars on `.seat.active-seat` via RAF. CSS `::before` with `conic-gradient` + `mask-composite: exclude` renders the countdown as a border ring (starts 12h, drains clockwise, green → amber → red).
 
 ### `js/game-solo.js` (standalone solo)
 Original game logic (FSM, shoe, all actions). Loads only in `solo.html`. No WebSocket.
@@ -102,6 +107,8 @@ Original game logic (FSM, shoe, all actions). Loads only in `solo.html`. No WebS
 {
   phase:           'IDLE|DEALING|INSURANCE|PLAYER_TURN|DEALER_TURN|RESOLVING',
   betDeadline:     1234567890,   // epoch ms, null outside IDLE
+  resolveDeadline: 1234567890,   // epoch ms, null outside RESOLVING
+  playerDeadline:  1234567890,   // epoch ms, null outside PLAYER_TURN
   shoe:            { remaining: 312, runningCount: 0 },
   players: [{
     pseudo, balance, bet, insuranceBet,

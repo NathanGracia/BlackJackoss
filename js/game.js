@@ -11,22 +11,15 @@ const Game = (() => {
   let ws          = null;
   let lastState   = null;
   let _timerRafId      = null;
+  let _resolveRafId    = null;
+  let _playerTimerRafId = null;
   let preSelectedAction = null;  // 'hit'|'stand'|'double'|'split'|'surrender'
   const _prev = { dealer: 0, hands: [] };
 
   // Client-only state
-  let wrongHighlight     = null;  // { tableType, rowKey }
-  let wrongHighlightTimer= null;
-  let hadWrongAction     = false;
-  let currentHandActionLog = [];
-  let handHistory        = [];
-  const HISTORY_MAX      = 4;
-
-  // Mode (simple/hard) — client only
-  let gameMode = 'simple';
-
-  const ACTION_LABELS = { H:'Hit', S:'Stand', D:'Double', P:'Split', R:'Surrender' };
-  const ACT_LABEL     = ACTION_LABELS;
+  let handHistory   = [];
+  const HISTORY_MAX = 4;
+  let autoBet = false;
 
   // ─── WebSocket ────────────────────────────────────────────────
   function connect() {
@@ -90,6 +83,12 @@ const Game = (() => {
     // Bet countdown bar
     updateBetTimer(state);
 
+    // Resolve countdown bar (dealer area)
+    updateResolveTimer(state);
+
+    // Player turn countdown border
+    updatePlayerTimer(state);
+
     // Update shoe bar + count
     updateShoeBar(state.shoe);
     updateCountDisplay(state.shoe);
@@ -100,14 +99,10 @@ const Game = (() => {
     // Render all seats (other players + me compact overview)
     renderSeats(state);
 
-    // Render my hands full-size
+    // Update balance + bet display (arc view in renderSeats handles card rendering)
     if (me) {
       updateBalanceDisplay(me.balance);
       updateBetDisplay(me.bet, me.hands);
-      renderMyHands(me, state);
-      // Show/hide player-area
-      const pa = document.getElementById('player-area');
-      if (pa) pa.hidden = !me.hands.length;
     }
 
     // Detect "just became my turn" → fire pre-selected action
@@ -116,27 +111,17 @@ const Game = (() => {
     // Buttons
     updateButtons(state, me);
 
-    // Strategy feedback — only when it's my turn
-    if (me && state.phase === 'PLAYER_TURN') {
-      const activePseudo = state.players[state.activePlayerIdx]?.pseudo;
-      if (activePseudo === myPseudo) {
-        const hand = me.hands[me.activeHandIdx];
-        if (hand && !hand.done) updateStrategyHighlight(hand, state.dealerCards, me);
-      }
-    }
-
     // Reset card animation counters on IDLE
     if (state.phase === 'IDLE') { _prev.dealer = 0; _prev.hands = []; }
 
-    // Detect phase transition → IDLE : reset wrong highlight
-    if (prev && prev.phase !== 'IDLE' && state.phase === 'IDLE') {
-      clearWrongHighlight();
-      setStrategyFeedback('', '');
-      Strategy.clearHighlights();
-      // Add to history if we were playing
-      if (prev.phase === 'RESOLVING' && me) {
-        _addToHistory(state, prev, me);
-      }
+    // Add to history when round ends
+    if (prev && prev.phase === 'RESOLVING' && state.phase === 'IDLE' && me) {
+      _addToHistory(state, prev, me);
+    }
+
+    // Auto-bet: place minimum bet automatically when a new round starts
+    if (autoBet && state.phase === 'IDLE' && prev?.phase !== 'IDLE') {
+      send({ type: 'bet', amount: 5 });
     }
 
     // Message area
@@ -226,7 +211,7 @@ const Game = (() => {
     });
   }
 
-  // ─── table seats (all players) ────────────────────────────────
+  // ─── arc table seats (all players) ───────────────────────────
   function renderSeats(state) {
     const container = document.getElementById('table-seats');
     if (!container) return;
@@ -234,58 +219,106 @@ const Game = (() => {
 
     const activePseudo = state.players[state.activePlayerIdx]?.pseudo;
     const sorted = [...state.players].sort((a, b) => a.seatIndex - b.seatIndex);
+    if (!sorted.length) return;
 
-    sorted.forEach(p => {
+    // My index in the sorted array — me always at the bottom (no lift)
+    const meIdx = sorted.findIndex(p => p.pseudo === myPseudo);
+
+    sorted.forEach((p, i) => {
       const isMe     = p.pseudo === myPseudo;
       const isActive = p.pseudo === activePseudo && state.phase === 'PLAYER_TURN';
 
       const seat = document.createElement('div');
-      seat.className = ['seat', isMe ? 'my-seat' : '', isActive ? 'active-seat' : '',
-                        !p.connected ? 'disconnected' : ''].filter(Boolean).join(' ');
+      seat.className = [
+        'seat',
+        isMe       ? 'my-seat'      : '',
+        isActive   ? 'active-seat'  : '',
+        !p.connected ? 'disconnected' : '',
+      ].filter(Boolean).join(' ');
 
-      // Name row
+      // Arc lift: seats farther from me are raised toward the dealer
+      const dist = meIdx >= 0 ? Math.abs(i - meIdx) : 0;
+      seat.style.transform = `translateY(-${dist * 26}px)`;
+
+      // ── Name row ──
       const nameRow = document.createElement('div');
       nameRow.className = 'seat-name-row';
       if (isActive) {
         const dot = document.createElement('span');
-        dot.className = 'seat-active-dot'; dot.textContent = '▶';
+        dot.className = 'seat-active-dot';
+        dot.textContent = '▶';
         nameRow.appendChild(dot);
       }
       const nameEl = document.createElement('span');
       nameEl.className = 'seat-name';
-      nameEl.textContent = p.pseudo + (isMe ? ' ★' : '');
+      nameEl.textContent = (isMe ? '★ ' : '') + p.pseudo;
       nameRow.appendChild(nameEl);
       seat.appendChild(nameRow);
 
-      // Cards
+      // ── Cards + score ──
       if (p.hands.length) {
-        p.hands.forEach(hand => {
+        p.hands.forEach((hand, hi) => {
+          const compact = !isMe; // full cards for me, compact for others
           const row = document.createElement('div');
           row.className = 'cards-row';
-          hand.cards.forEach(c => row.appendChild(createCardElement(c, true)));
+          const prevCount = isMe ? (_prev.hands[hi] || 0) : 0;
+          hand.cards.forEach((c, ci) => {
+            const el = createCardElement(c, compact);
+            if (isMe && ci >= prevCount) el.classList.add('card-enter');
+            row.appendChild(el);
+          });
+          if (isMe) _prev.hands[hi] = hand.cards.length;
           seat.appendChild(row);
+
           const { total, isBust } = Strategy.getHandTotal(hand.cards);
+          const isBJ = _isBlackjack(hand.cards) && !hand.fromSplit;
+          let scoreText = isBJ            ? 'BJ'
+                        : hand.surrendered ? 'SURR'
+                        : isBust           ? `${total} BUST`
+                        :                    String(total);
+          if (isMe && hand.doubled && !isBJ && !isBust) scoreText += ' ×2';
+
           const sc = document.createElement('div');
-          sc.className = 'seat-score' + (isBust ? ' bust' : '');
-          sc.textContent = hand.surrendered ? 'SURR' :
-                           (_isBlackjack(hand.cards) && !hand.fromSplit) ? 'BJ' :
-                           isBust ? total + ' B' : String(total);
+          sc.className = 'seat-score' + (isBust ? ' bust' : '') + (isMe ? ' my-score' : '');
+          sc.textContent = scoreText;
           seat.appendChild(sc);
+
+          if (isMe && p.hands.length > 1) {
+            const lbl = document.createElement('div');
+            lbl.className = 'hand-label';
+            lbl.textContent = `HAND ${hi + 1}  $${hand.bet}`;
+            seat.appendChild(lbl);
+          }
         });
       } else {
         const w = document.createElement('div');
         w.className = 'seat-waiting';
-        w.textContent = state.phase === 'IDLE' ? (p.bet > 0 ? `$${p.bet} ✓` : '—') : 'out';
+        w.textContent = state.phase === 'IDLE'
+          ? (p.bet > 0 ? `$${p.bet} ✓` : '—')
+          : 'out';
         seat.appendChild(w);
       }
 
-      // Info: balance + bet
+      // ── Info: balance + total bet ──
       const info = document.createElement('div');
       info.className = 'seat-info';
-      info.innerHTML = `<span class="seat-balance">$${p.balance}</span>`;
-      if (p.bet > 0 && !p.hands.length) info.innerHTML += `<span class="seat-bet"> $${p.bet}</span>`;
-      seat.appendChild(info);
 
+      const balEl = document.createElement('span');
+      balEl.className = 'seat-balance';
+      balEl.textContent = '$' + p.balance;
+      info.appendChild(balEl);
+
+      const totalBet = p.hands.length
+        ? p.hands.reduce((s, h) => s + h.bet, 0)
+        : p.bet;
+      if (totalBet > 0) {
+        const betEl = document.createElement('span');
+        betEl.className = 'seat-bet';
+        betEl.textContent = '$' + totalBet;
+        info.appendChild(betEl);
+      }
+
+      seat.appendChild(info);
       container.appendChild(seat);
     });
   }
@@ -336,8 +369,8 @@ const Game = (() => {
     if (btnIns)   { btnIns.hidden   = !isIns; btnIns.disabled   = !isIns; }
     if (btnNoIns) { btnNoIns.hidden = !isIns; btnNoIns.disabled = !isIns; }
 
-    // During other player's turn → enable buttons for pre-select (except already done constraints)
-    if (isOtherTurn && me?.hands.length) {
+    // During other player's turn → enable buttons for pre-select, only if I still have hands to play
+    if (isOtherTurn && me?.hands.length && me.hands.some(h => !h.done)) {
       _setBtn('btn-hit',       false);
       _setBtn('btn-stand',     false);
       _setBtn('btn-double',    false);
@@ -407,66 +440,6 @@ const Game = (() => {
     }
   }
 
-  // ─── strategy highlight ───────────────────────────────────────
-  function updateStrategyHighlight(hand, dealerCards, me) {
-    if (wrongHighlight) {
-      Strategy.highlightRow(wrongHighlight.tableType, wrongHighlight.rowKey);
-      return;
-    }
-    if (!dealerCards.length) return;
-    const dealerUpcard = _cardValue(dealerCards[0]);
-    const { canDouble, canSplit, canSurrender } = _getAvail(hand, me);
-    const isFirst = hand.cards.length === 2 && !hand.fromSplit;
-    const { tableType, rowKey } = Strategy.getAction(hand.cards, dealerUpcard,
-      { canDouble, canSplit, canSurrender: isFirst && canSurrender, isFirstAction: isFirst });
-    Strategy.highlightRow(tableType, rowKey);
-  }
-
-  function checkActionFeedback(chosenAction, hand, dealerCards, me) {
-    const dealerUpcard = _cardValue(dealerCards[0]);
-    const { canDouble, canSplit, canSurrender } = _getAvail(hand, me);
-    const isFirst = hand.cards.length === 2 && !hand.fromSplit;
-    const { action: rec, tableType, rowKey } = Strategy.getAction(hand.cards, dealerUpcard,
-      { canDouble, canSplit, canSurrender: isFirst && canSurrender, isFirstAction: isFirst });
-
-    currentHandActionLog.push({
-      handIdx: me.activeHandIdx,
-      cards: hand.cards.map(c => ({ rank: c.rank, suit: c.suit })),
-      takenAction: chosenAction, correctAction: rec, wasCorrect: chosenAction === rec,
-    });
-
-    if (chosenAction === rec) {
-      setStrategyFeedback(`✓ Correct — ${ACTION_LABELS[rec]}`, 'correct');
-      clearWrongHighlight();
-    } else {
-      hadWrongAction = true;
-      const el = document.getElementById('strategy-feedback');
-      if (el) el.classList.remove('wrong');
-      requestAnimationFrame(() =>
-        setStrategyFeedback(`✗ Mauvaise déc. ! Il fallait : ${ACTION_LABELS[rec]}`, 'wrong')
-      );
-      clearTimeout(wrongHighlightTimer);
-      wrongHighlight = { tableType, rowKey };
-      wrongHighlightTimer = setTimeout(clearWrongHighlight, 5000);
-    }
-  }
-
-  function clearWrongHighlight() {
-    wrongHighlight = null;
-    clearTimeout(wrongHighlightTimer);
-  }
-
-  function _getAvail(hand, me) {
-    const { total } = Strategy.getHandTotal(hand.cards);
-    return {
-      canDouble:    hand.cards.length === 2 && me.balance >= hand.bet,
-      canSplit:     hand.cards.length === 2 &&
-                    _cardValue(hand.cards[0]) === _cardValue(hand.cards[1]) &&
-                    me.splitCount < 3 && me.balance >= hand.bet,
-      canSurrender: hand.cards.length === 2 && !hand.fromSplit && me.hands.length === 1,
-    };
-  }
-
   // ─── card rendering ───────────────────────────────────────────
   function createCardElement(card, compact = false) {
     const div = document.createElement('div');
@@ -529,11 +502,6 @@ const Game = (() => {
     if (decksEl) decksEl.textContent = decks.toFixed(1);
   }
 
-  function setStrategyFeedback(text, type) {
-    const el = document.getElementById('strategy-feedback');
-    if (el) { el.textContent = text; el.className = 'strategy-feedback ' + (type||''); }
-  }
-
   // ─── bet countdown bar ────────────────────────────────────────
   function updateBetTimer(state) {
     const wrap  = document.getElementById('bet-timer-wrap');
@@ -571,6 +539,65 @@ const Game = (() => {
     tick();
   }
 
+  // ─── resolve countdown bar (dealer area) ─────────────────────
+  function updateResolveTimer(state) {
+    const wrap = document.getElementById('resolve-timer-wrap');
+    const bar  = document.getElementById('resolve-timer-bar');
+    if (!wrap || !bar) return;
+
+    cancelAnimationFrame(_resolveRafId);
+
+    if (state.phase !== 'RESOLVING' || !state.resolveDeadline) {
+      wrap.hidden = true;
+      return;
+    }
+
+    wrap.hidden = false;
+    const total    = 4000; // must match RESOLVE_MS on server
+    const deadline = state.resolveDeadline;
+
+    function tick() {
+      const remaining = Math.max(0, deadline - Date.now());
+      bar.style.width = ((remaining / total) * 100) + '%';
+      if (remaining > 0) _resolveRafId = requestAnimationFrame(tick);
+      else bar.style.width = '0%';
+    }
+
+    tick();
+  }
+
+  // ─── player turn border countdown ────────────────────────────
+  function updatePlayerTimer(state) {
+    cancelAnimationFrame(_playerTimerRafId);
+
+    if (state.phase !== 'PLAYER_TURN' || !state.playerDeadline) {
+      // Reset any leftover CSS vars
+      document.querySelectorAll('.seat.active-seat').forEach(el => {
+        el.style.setProperty('--player-timer-pct', '1');
+      });
+      return;
+    }
+
+    const total    = 10000; // must match PLAYER_TURN_MS on server
+    const deadline = state.playerDeadline;
+
+    function tick() {
+      const el = document.querySelector('.seat.active-seat');
+      if (el) {
+        const remaining = Math.max(0, deadline - Date.now());
+        const pct       = remaining / total;
+        el.style.setProperty('--player-timer-pct', pct.toFixed(4));
+        const color = pct < 0.25 ? 'var(--red)'
+                    : pct < 0.5  ? 'var(--amber)'
+                    :               'var(--accent)';
+        el.style.setProperty('--player-timer-color', color);
+      }
+      _playerTimerRafId = requestAnimationFrame(tick);
+    }
+
+    tick();
+  }
+
   function _showSeedImage(base64) {
     const overlay = document.getElementById('seed-overlay');
     const img     = document.getElementById('seed-img');
@@ -598,18 +625,8 @@ const Game = (() => {
     const { total: dt, isBust: db } = Strategy.getFullHandTotal(prevState.dealerCards || []);
     const dealerText = db ? 'BUST' : String(dt);
 
-    handHistory.unshift({
-      playerText:   playerParts.join(' / ') || '—',
-      dealerText,
-      decisionClass: hadWrongAction ? 'bad' : 'good',
-      net,
-      actions:  [...currentHandActionLog],
-      dealerUp: prevState.dealerCards?.[0] || { rank:'?', suit:'' },
-    });
+    handHistory.unshift({ playerText: playerParts.join(' / ') || '—', dealerText, net });
     if (handHistory.length > HISTORY_MAX) handHistory.pop();
-
-    hadWrongAction       = false;
-    currentHandActionLog = [];
     _renderHistory();
   }
 
@@ -621,64 +638,15 @@ const Game = (() => {
     handHistory.forEach(entry => {
       const sign   = entry.net > 0 ? '+' : '';
       const netCls = entry.net > 0 ? 'pos' : entry.net < 0 ? 'neg' : 'zero';
-      const icon   = entry.decisionClass === 'good' ? '✓' : '✗';
       const div    = document.createElement('div');
-      div.className = `history-entry h-${entry.decisionClass}`;
+      div.className = 'history-entry';
       div.innerHTML = `
         <div class="h-row">
-          <span class="h-icon">${icon}</span>
           <span class="h-net h-net-${netCls}">${sign}$${entry.net}</span>
         </div>
         <div class="h-totals">${entry.playerText} <span class="h-vs">vs</span> ${entry.dealerText}</div>`;
-      div.addEventListener('mouseenter', () => _showDetail(entry, div));
-      div.addEventListener('mouseleave',  _hideDetail);
       el.appendChild(div);
     });
-  }
-
-  function _ensureDetailPopup() {
-    if (document.getElementById('history-detail')) return;
-    const el = document.createElement('div');
-    el.id = 'history-detail'; el.className = 'history-detail';
-    document.body.appendChild(el);
-  }
-
-  function _showDetail(entry, anchor) {
-    const popup = document.getElementById('history-detail');
-    if (!popup) return;
-    const byHand = {};
-    (entry.actions||[]).forEach(a => (byHand[a.handIdx]=byHand[a.handIdx]||[]).push(a));
-    const hCount = Object.keys(byHand).length;
-    let html = `<div class="hd-dealer">Dealer up : ${entry.dealerUp.rank}${entry.dealerUp.suit}</div>`;
-    if (!entry.actions?.length) {
-      html += `<div class="hd-no-actions">BJ / auto</div>`;
-    } else {
-      Object.entries(byHand).forEach(([hi, actions]) => {
-        if (hCount>1) html+=`<div class="hd-hand-label">Hand ${+hi+1}</div>`;
-        actions.forEach((a,i) => {
-          const cards = a.cards.map(c=>c.rank+c.suit).join(' ');
-          const cls   = a.wasCorrect ? 'hd-ok' : 'hd-err';
-          html += `<div class="hd-action">
-            <span class="hd-num">${i+1}.</span>
-            <span class="hd-cards">${cards}</span>
-            <span class="hd-act">${ACT_LABEL[a.takenAction]}</span>
-            <span class="${cls}">${a.wasCorrect?'✓':'✗'}</span>
-            ${!a.wasCorrect?`<span class="hd-should">→ ${ACT_LABEL[a.correctAction]}</span>`:''}
-          </div>`;
-        });
-      });
-    }
-    popup.innerHTML = html;
-    const rect = anchor.getBoundingClientRect();
-    let top = rect.top, left = rect.right + 8;
-    popup.classList.add('visible');
-    const maxTop = window.innerHeight - popup.offsetHeight - 8;
-    if (top > maxTop) top = maxTop;
-    popup.style.top = top + 'px'; popup.style.left = left + 'px';
-  }
-
-  function _hideDetail() {
-    document.getElementById('history-detail')?.classList.remove('visible');
   }
 
   // ─── util ─────────────────────────────────────────────────────
@@ -703,7 +671,6 @@ const Game = (() => {
   // ─── init ─────────────────────────────────────────────────────
   function init() {
     Strategy.renderCharts();
-    _ensureDetailPopup();
 
     // Join screen
     const joinForm = document.getElementById('join-form');
@@ -724,15 +691,15 @@ const Game = (() => {
     });
     document.getElementById('btn-clear-bet')?.addEventListener('click', () => send({ type:'clearBet' }));
 
-    // Actions — capture action + check feedback before sending
+    // Actions
     const actionBtns = [
-      ['btn-hit',       'hit',       'H'],
-      ['btn-stand',     'stand',     'S'],
-      ['btn-double',    'double',    'D'],
-      ['btn-split',     'split',     'P'],
-      ['btn-surrender', 'surrender', 'R'],
+      ['btn-hit',       'hit'],
+      ['btn-stand',     'stand'],
+      ['btn-double',    'double'],
+      ['btn-split',     'split'],
+      ['btn-surrender', 'surrender'],
     ];
-    actionBtns.forEach(([id, action, code]) => {
+    actionBtns.forEach(([id, action]) => {
       document.getElementById(id)?.addEventListener('click', () => {
         if (!lastState || !myPseudo) return;
         const isMyTurn = lastState.phase === 'PLAYER_TURN' &&
@@ -746,11 +713,6 @@ const Game = (() => {
         }
 
         // My turn: send immediately
-        const me   = lastState.players.find(p => p.pseudo === myPseudo);
-        const hand = me?.hands[me.activeHandIdx];
-        if (me && hand && lastState.dealerCards.length) {
-          checkActionFeedback(code, hand, lastState.dealerCards, me);
-        }
         send({ type:'action', action });
       });
     });
@@ -768,34 +730,13 @@ const Game = (() => {
     document.getElementById('btn-shuffle')?.addEventListener('click', () =>
       send({ type:'shuffle' }));
 
-    // Auto-bet toggle (client-only, sends bet on click)
-    let autoBet = false;
+    // Auto-bet toggle
     const autoBetBtn = document.getElementById('btn-auto-bet');
     if (autoBetBtn) {
       autoBetBtn.addEventListener('click', () => {
         autoBet = !autoBet;
         autoBetBtn.classList.toggle('active', autoBet);
         if (autoBet && lastState?.phase === 'IDLE') send({ type:'bet', amount: 5 });
-      });
-    }
-
-    // Mode toggle
-    const modeBtn   = document.getElementById('mode-toggle');
-    const modeLabel = document.getElementById('mode-label');
-    document.body.classList.add('simple-mode');
-    if (modeBtn) {
-      modeBtn.addEventListener('click', () => {
-        if (gameMode === 'simple') {
-          gameMode = 'hard';
-          document.body.classList.remove('simple-mode');
-          modeBtn.classList.add('hard');
-          if (modeLabel) modeLabel.textContent = 'HARD';
-        } else {
-          gameMode = 'simple';
-          document.body.classList.add('simple-mode');
-          modeBtn.classList.remove('hard');
-          if (modeLabel) modeLabel.textContent = 'SIMPLE';
-        }
       });
     }
 

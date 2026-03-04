@@ -35,9 +35,13 @@ npm run dev          # hot-reload (node --watch)
 ## Multijoueur
 
 - Table partagée avec sabot commun
-- Timer de mise de **8 secondes** — le deal part automatiquement quand le timer tombe à 0 si au moins un joueur a misé
+- Timer de mise de **8 secondes** — le deal part automatiquement si au moins un joueur a misé
+- **Timer de tour de **10 secondes** par joueur** — auto-stand à expiration, barre de progression en conic-gradient autour du seat actif (vert → amber → rouge)
 - Tours séquentiels par ordre d'arrivée, indicateur `▶` sur le joueur actif
 - **Pré-sélection d'action** : cliquez une action pendant le tour d'un autre joueur pour l'exécuter automatiquement quand votre tour arrive
+- Barre de progression en fin de round (4 secondes) dans la zone dealer
+- Le dealer ne tire pas si tous les joueurs sont bust ou surrender
+- Joueurs déconnectés retirés immédiatement en IDLE, auto-stand en cours de partie
 - Balances persistées dans `data/balances.json` entre les sessions
 
 ## Intégration Determinoss (optionnel)
