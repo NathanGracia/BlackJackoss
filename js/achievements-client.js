@@ -76,11 +76,9 @@ window.AchievementsClient = (() => {
 
   // ── Skin application ────────────────────────────────────────────────
   function _applySkin(skinValue) {
-    console.log('[Skin] _applySkin called:', skinValue, '| _sendSkin:', !!_sendSkin);
     _activeSkin = skinValue;
     localStorage.setItem('bj-skin', skinValue);
     if (_sendSkin) _sendSkin(skinValue);
-    else console.warn('[Skin] _sendSkin is null — init() not called with sendSkinFn?');
     _refreshSkinButtons();
   }
 

@@ -159,6 +159,9 @@ const Game = (() => {
     if (me) {
       updateBalanceDisplay(me.balance);
       updateBetDisplay(me.bet, me.hands);
+      // Show refill button if broke and IDLE
+      const refillBtn = document.getElementById('btn-refill');
+      if (refillBtn) refillBtn.hidden = !(me.balance === 0 && state.phase === 'IDLE');
     }
 
     // Detect "just became my turn" → fire pre-selected action
@@ -1275,6 +1278,11 @@ const Game = (() => {
     // Skins button
     document.getElementById('btn-skins')?.addEventListener('click', () => {
       AchievementsClient.openSkinPanel();
+    });
+
+    // Refill button
+    document.getElementById('btn-refill')?.addEventListener('click', () => {
+      send({ type: 'refill' });
     });
 
     // Strategy toggle

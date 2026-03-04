@@ -1291,6 +1291,33 @@ body {
   border-color: rgba(251,191,36,.55);
 }
 
+.refill-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 1rem;
+  border: 1px solid rgba(248,113,113,.4);
+  border-radius: var(--radius-sm);
+  background: rgba(248,113,113,.1);
+  color: var(--red);
+  font-family: var(--font);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  transition: all 0.15s;
+  animation: refill-pulse 2s ease-in-out infinite;
+}
+.refill-btn:hover {
+  background: rgba(248,113,113,.2);
+  border-color: rgba(248,113,113,.65);
+  transform: translateY(-1px);
+}
+@keyframes refill-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(248,113,113,.0); }
+  50%       { box-shadow: 0 0 0 5px rgba(248,113,113,.15); }
+}
+
 .chip-clear {
   border-color: rgba(248,113,113,.2);
   background: rgba(248,113,113,.07);

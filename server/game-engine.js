@@ -279,10 +279,19 @@ function playerClearBet(pseudo) {
 const VALID_SKINS = new Set(['','theme-fire','theme-volcano','theme-kaleidoscope','theme-underdog','theme-zen','theme-veteran','theme-pain','theme-legend','theme-streak','theme-vip','theme-gold','theme-ashes','theme-divine']);
 function playerSetSkin(pseudo, skin) {
   const p = getPlayer(pseudo);
-  console.log('[playerSetSkin]', pseudo, skin, '| found:', !!p, '| valid:', VALID_SKINS.has(skin));
-  if (!p || !VALID_SKINS.has(skin)) return;
+if (!p || !VALID_SKINS.has(skin)) return;
   p.skin = skin;
   broadcast();
+}
+
+const REFILL_AMOUNT = 100;
+function playerRefill(pseudo) {
+  const p = getPlayer(pseudo);
+  if (!p || p.balance > 0 || state.phase !== PHASE.IDLE) return { error: 'Cannot refill now' };
+  p.balance = REFILL_AMOUNT;
+  db.setBalance(pseudo, REFILL_AMOUNT);
+  broadcast();
+  return {};
 }
 
 function playerSetAutoBet(pseudo, enabled) {
@@ -860,6 +869,7 @@ module.exports = {
   playerDisconnect,
   playerBet,
   playerClearBet,
+  playerRefill,
   playerSetAutoBet,
   playerSetSkin,
   playerInsurance,

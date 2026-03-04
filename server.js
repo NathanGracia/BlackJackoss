@@ -120,6 +120,13 @@ wss.on('connection', ws => {
       return;
     }
 
+    // ── refill ──────────────────────────────────────────────────
+    if (msg.type === 'refill') {
+      const r = engine.playerRefill(myPseudo);
+      if (r && r.error) ws.send(JSON.stringify({ type: 'error', message: r.error }));
+      return;
+    }
+
     // ── setSkin ─────────────────────────────────────────────────
     if (msg.type === 'setSkin') {
       engine.playerSetSkin(myPseudo, String(msg.skin || ''));
