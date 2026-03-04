@@ -53,8 +53,8 @@ const Game = (() => {
     if (msg.type === 'welcome') {
       showTable();
       updateBalanceDisplay(msg.balance);
-      // Restore skin from localStorage
-      const savedSkin = localStorage.getItem('bj-skin') || '';
+      // Restore skin saved for this specific pseudo
+      const savedSkin = localStorage.getItem('bj-skin-' + myPseudo) || '';
       send({ type: 'setSkin', skin: savedSkin });
     }
 
@@ -1172,7 +1172,10 @@ const Game = (() => {
   // ─── init ─────────────────────────────────────────────────────
   function init() {
     Strategy.renderCharts();
-    AchievementsClient.init(window._ALL_ACHIEVEMENTS || [], skin => send({ type: 'setSkin', skin }));
+    AchievementsClient.init(window._ALL_ACHIEVEMENTS || [], skin => {
+      localStorage.setItem('bj-skin-' + myPseudo, skin);
+      send({ type: 'setSkin', skin });
+    });
 
     // Join screen
     const joinForm = document.getElementById('join-form');

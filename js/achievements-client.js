@@ -7,7 +7,7 @@ window.AchievementsClient = (() => {
 
   const TOTAL = 19;
   let _unlocked = [];   // full achievement objects
-  let _activeSkin    = localStorage.getItem('bj-skin') || '';
+  let _activeSkin    = '';
   let _panelOpen     = false;
   let _skinPanelOpen = false;
   let _sendSkin      = null;  // injected by game.js
@@ -77,8 +77,7 @@ window.AchievementsClient = (() => {
   // ── Skin application ────────────────────────────────────────────────
   function _applySkin(skinValue) {
     _activeSkin = skinValue;
-    localStorage.setItem('bj-skin', skinValue);
-    if (_sendSkin) _sendSkin(skinValue);
+    if (_sendSkin) _sendSkin(skinValue);  // game.js handles localStorage
     _refreshSkinButtons();
   }
 
