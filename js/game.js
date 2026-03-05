@@ -78,6 +78,10 @@ const Game = (() => {
       if (window.EmotesClient) EmotesClient.showIncomingEmote(msg.pseudo, msg.emoteId, msg.x, msg.y);
     }
 
+    if (msg.type === 'chat') {
+      showChatBubble(msg.pseudo, msg.text);
+    }
+
     if (msg.type === 'error') {
       console.warn('[Server]', msg.message);
     }
@@ -478,6 +482,38 @@ const Game = (() => {
     }
     if (!ph.done && nh.done && !nh.surrendered && !nh.doubled) return 'STAND';
     return null;
+  }
+
+  // ─── chat bubble above seat ───────────────────────────────────
+  function showChatBubble(pseudo, text) {
+    const seatEl = document.querySelector(`#table-seats [data-pseudo="${CSS.escape(pseudo)}"]`);
+    let anchorX, anchorY;
+    if (seatEl) {
+      const r = seatEl.getBoundingClientRect();
+      anchorX = r.left + r.width / 2;
+      anchorY = r.top;
+    } else {
+      anchorX = window.innerWidth  / 2;
+      anchorY = window.innerHeight / 2;
+    }
+
+    const el = document.createElement('div');
+    el.className = 'chat-bubble';
+    el.style.left = `${anchorX}px`;
+    el.style.top  = `${anchorY}px`;
+    el.innerHTML = `
+      <div class="chat-bubble-name">${_escHtml(pseudo)}</div>
+      <div class="chat-bubble-text">${_escHtml(text)}</div>
+      <div class="chat-bubble-tail"></div>
+    `;
+    document.body.appendChild(el);
+
+    requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('show')));
+    setTimeout(() => { el.classList.add('rise'); setTimeout(() => el.remove(), 600); }, 4000);
+  }
+
+  function _escHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
   function _showNetToast(pseudo, hand, hi, winIdx = 0) {
@@ -1298,6 +1334,16 @@ const Game = (() => {
       if (!window.EmotesClient) return;
       const r = this.getBoundingClientRect();
       EmotesClient.openWheel(r.left + r.width / 2, r.top + r.height / 2, false);
+    });
+
+    // Chat form
+    document.getElementById('chat-form')?.addEventListener('submit', e => {
+      e.preventDefault();
+      const input = document.getElementById('chat-input');
+      const text  = input.value.trim();
+      if (!text) return;
+      send({ type: 'chat', text });
+      input.value = '';
     });
 
     // Refill button

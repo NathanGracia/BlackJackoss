@@ -1,11 +1,121 @@
 /* ════════════════════════════════════════════════════════════════════
    EMOTES — Wheel · Popup · Customize · Unlock toast
+   CHAT  — Input · Bubble
    ════════════════════════════════════════════════════════════════════ */
 
-/* ── Emote button (bet row, left side) ───────────────────────────── */
+/* ── Chat input (bet row, right side) ────────────────────────────── */
+.chat-form {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  max-width: 200px;
+  margin-left: auto;
+}
+.chat-input {
+  width: 100%;
+  height: 38px;
+  padding: 0 0.65rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 0.7rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.chat-input::placeholder { color: var(--text-faint); opacity: 0.55; }
+.chat-input:focus {
+  border-color: rgba(99,202,253,.4);
+  background: rgba(99,202,253,.04);
+}
+
+/* ── Chat bubble (above seat, same animation as emote popup) ─────── */
+.chat-bubble {
+  position: fixed;
+  z-index: 9500;
+  pointer-events: none;
+  max-width: 220px;
+  transform: translateX(-50%) translateY(0) scale(0.7);
+  opacity: 0;
+  transition: opacity 0.28s cubic-bezier(.22,.8,.32,1),
+              transform 0.28s cubic-bezier(.22,.8,.32,1);
+}
+.chat-bubble.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(-100%) scale(1);
+}
+.chat-bubble.rise {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-155%) scale(0.92);
+  transition: opacity 0.55s ease, transform 0.55s ease;
+}
+
+.chat-bubble-name {
+  font-family: var(--font-mono);
+  font-size: 0.52rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(99,202,253,.85);
+  margin-bottom: 0.22rem;
+  text-align: center;
+}
+.chat-bubble-text {
+  background: rgba(13,13,20,.92);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 10px;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.78rem;
+  color: #fff;
+  line-height: 1.4;
+  text-align: center;
+  word-break: break-word;
+  box-shadow: 0 6px 20px rgba(0,0,0,.5);
+}
+/* Small downward tail pointing toward the seat */
+.chat-bubble-tail {
+  width: 0; height: 0;
+  border-left:  6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top:   7px solid rgba(255,255,255,.1);
+  margin: 0 auto;
+  position: relative;
+}
+.chat-bubble-tail::after {
+  content: '';
+  position: absolute;
+  top: -9px; left: -5px;
+  width: 0; height: 0;
+  border-left:  5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top:   6px solid rgba(13,13,20,.92);
+}
+
+/* ── PNG emote images (replaces emoji when file/png defined) ─────── */
+.emote-img {
+  width:  42px;
+  height: 42px;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+  border-radius: 5px;
+}
+/* Popup */
+.emote-popup-emoji .emote-img  { width: 80px;   height: 80px;  border-radius: 8px; }
+/* Customize grid */
+.ecard-emoji .emote-img        { width: 48px;   height: 48px;  border-radius: 6px; }
+/* Unlock toast */
+.emote-unlock-emoji .emote-img { width: 44px;   height: 44px;  border-radius: 6px; }
+/* Preview wheel (smaller slots) */
+.emote-preview-slot .emote-img { width: 30px;   height: 30px;  border-radius: 4px; }
+
+/* ── Emote button (bet row, right side) ──────────────────────────── */
 .emotes-btn {
   flex-shrink: 0;
-  margin-left: auto;
   width: 38px;
   height: 38px;
   display: flex;

@@ -10,15 +10,83 @@ const { ACHIEVEMENT_MAP } = require('./server/achievements-def');
 
 const PORT = process.env.PORT || 3000;
 
-// ─── HTTP server (static files) ───────────────────────────────────────────────
+// ─── Custom emotes helpers ─────────────────────────────────────────────────────
+const EMOTES_FILE = path.join(__dirname, 'data', 'emotes-custom.json');
+const EMOTES_DIR  = path.join(__dirname, 'emotes');
+if (!fs.existsSync(EMOTES_DIR)) fs.mkdirSync(EMOTES_DIR);
+
+function readCustomEmotes() {
+  try { return JSON.parse(fs.readFileSync(EMOTES_FILE, 'utf8')); } catch(_) { return []; }
+}
+function writeCustomEmotes(arr) {
+  fs.writeFileSync(EMOTES_FILE, JSON.stringify(arr, null, 2));
+}
+
+// ─── HTTP server (static files + admin API) ───────────────────────────────────
 const MIME = {
   '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
   '.json': 'application/json', '.svg': 'image/svg+xml', '.txt': 'text/plain',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp',
 };
 
 const httpServer = http.createServer((req, res) => {
-  let filePath = path.join(__dirname, req.url === '/' ? 'index.html' : req.url);
-  // Security: stay within project dir
+  const url = req.url.split('?')[0];
+
+  // ── GET /api/emotes ─────────────────────────────────────────────
+  if (req.method === 'GET' && url === '/api/emotes') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(readCustomEmotes()));
+    return;
+  }
+
+  // ── POST /api/admin/emotes ──────────────────────────────────────
+  if (req.method === 'POST' && url === '/api/admin/emotes') {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => {
+      try {
+        const { id, label, emoji, free, unlockedBy, fileData, fileExt } = JSON.parse(body);
+        const safeId = String(id || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 40);
+        if (!safeId || !label) { res.writeHead(400); res.end('id and label required'); return; }
+        const emotes = readCustomEmotes();
+        if (emotes.find(e => e.id === safeId)) { res.writeHead(409); res.end('ID already exists'); return; }
+        const emote = { id: safeId, label: String(label).slice(0, 40), emoji: String(emoji || '🖼️') };
+        if (free || !unlockedBy) emote.free = true;
+        if (unlockedBy) emote.unlockedBy = String(unlockedBy);
+        if (fileData && fileExt) {
+          const allowed = ['png','jpg','jpeg','webp','gif'];
+          const ext = String(fileExt).toLowerCase().replace(/[^a-z]/g,'');
+          if (!allowed.includes(ext)) { res.writeHead(400); res.end('Invalid file type'); return; }
+          const file = `${safeId}.${ext}`;
+          fs.writeFileSync(path.join(EMOTES_DIR, file), Buffer.from(fileData, 'base64'));
+          emote.file = file;
+        }
+        emotes.push(emote);
+        writeCustomEmotes(emotes);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(emote));
+      } catch(e) { res.writeHead(500); res.end('Server error'); }
+    });
+    return;
+  }
+
+  // ── DELETE /api/admin/emotes/:id ────────────────────────────────
+  if (req.method === 'DELETE' && url.startsWith('/api/admin/emotes/')) {
+    const id = url.slice('/api/admin/emotes/'.length);
+    const emotes = readCustomEmotes();
+    const idx = emotes.findIndex(e => e.id === id);
+    if (idx < 0) { res.writeHead(404); res.end('Not found'); return; }
+    const [removed] = emotes.splice(idx, 1);
+    if (removed.file) {
+      try { fs.unlinkSync(path.join(EMOTES_DIR, removed.file)); } catch(_) {}
+    }
+    writeCustomEmotes(emotes);
+    res.writeHead(200); res.end('OK');
+    return;
+  }
+
+  // ── Static files ────────────────────────────────────────────────
+  let filePath = path.join(__dirname, url === '/' ? 'index.html' : url);
   if (!filePath.startsWith(__dirname)) { res.writeHead(403); res.end(); return; }
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); res.end('Not found'); return; }
@@ -137,6 +205,17 @@ wss.on('connection', ws => {
     if (msg.type === 'shuffle') {
       const r = await engine.forceShuffle(myPseudo);
       if (r && r.error) ws.send(JSON.stringify({ type:'error', message: r.error }));
+      return;
+    }
+
+    // ── chat ─────────────────────────────────────────────────────
+    if (msg.type === 'chat') {
+      const text = String(msg.text || '').trim().slice(0, 80);
+      if (!text) return;
+      const out = JSON.stringify({ type: 'chat', pseudo: myPseudo, text });
+      wss.clients.forEach(client => {
+        if (client.readyState === client.OPEN) client.send(out);
+      });
       return;
     }
 

@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin — Emotes</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    body { padding: 2rem; max-width: 960px; margin: 0 auto; }
+
+    h1 { font-size: 1.1rem; font-weight: 700; color: var(--accent);
+         letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 2rem; }
+
+    .admin-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; align-items: start; }
+
+    /* ── Add form ── */
+    .add-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+    }
+    .add-card h2 { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.1em;
+                   text-transform: uppercase; color: var(--text-faint); margin-bottom: 1.2rem; }
+
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      height: 140px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+      margin-bottom: 1rem;
+      position: relative;
+      overflow: hidden;
+    }
+    .drop-zone:hover, .drop-zone.dragover {
+      border-color: var(--accent);
+      background: rgba(16,185,129,.05);
+    }
+    .drop-zone input[type=file] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer;
+    }
+    .drop-zone-text { font-size: 0.72rem; color: var(--text-faint); pointer-events: none; }
+    .drop-zone-sub  { font-size: 0.6rem;  color: var(--text-faint); opacity: 0.5; pointer-events: none; }
+    .drop-preview {
+      width: 100%; height: 100%;
+      object-fit: contain;
+      position: absolute; inset: 0;
+      pointer-events: none;
+      border-radius: 8px;
+    }
+
+    .field { margin-bottom: 0.85rem; }
+    .field label {
+      display: block;
+      font-size: 0.6rem; font-weight: 600; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--text-faint);
+      margin-bottom: 0.28rem;
+    }
+    .field input, .field select {
+      width: 100%; padding: 0.45rem 0.65rem;
+      background: var(--bg-main);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 0.78rem;
+      outline: none;
+      box-sizing: border-box;
+      transition: border-color 0.15s;
+    }
+    .field input:focus, .field select:focus { border-color: rgba(16,185,129,.4); }
+    .field select option { background: var(--bg-surface); }
+
+    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.65rem; }
+
+    .unlock-row { display: none; }
+    .unlock-row.visible { display: block; }
+
+    .radio-group { display: flex; gap: 0.75rem; margin-top: 0.1rem; }
+    .radio-group label {
+      display: flex; align-items: center; gap: 0.35rem;
+      font-size: 0.72rem; color: var(--text); cursor: pointer;
+      text-transform: none; letter-spacing: 0;
+    }
+    .radio-group input[type=radio] { accent-color: var(--accent); }
+
+    .btn-submit {
+      width: 100%; padding: 0.6rem;
+      background: var(--accent);
+      border: none; border-radius: 7px;
+      color: #000; font-family: var(--font);
+      font-size: 0.78rem; font-weight: 700;
+      cursor: pointer; transition: opacity 0.15s;
+      margin-top: 0.5rem;
+    }
+    .btn-submit:hover { opacity: 0.85; }
+    .btn-submit:disabled { opacity: 0.4; cursor: default; }
+
+    /* ── Emote list ── */
+    .list-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+    }
+    .list-card h2 { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.1em;
+                    text-transform: uppercase; color: var(--text-faint); margin-bottom: 1.2rem; }
+
+    .emote-list { display: flex; flex-direction: column; gap: 0.5rem; }
+
+    .emote-row {
+      display: flex; align-items: center; gap: 0.75rem;
+      padding: 0.6rem 0.75rem;
+      background: var(--bg-main);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      transition: border-color 0.15s;
+    }
+    .emote-row:hover { border-color: rgba(255,255,255,.1); }
+    .emote-row.builtin { opacity: 0.45; }
+
+    .emote-thumb {
+      width: 38px; height: 38px; flex-shrink: 0;
+      border-radius: 6px; object-fit: cover;
+      background: var(--bg-surface);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.5rem;
+      overflow: hidden;
+    }
+    .emote-thumb img { width: 100%; height: 100%; object-fit: cover; border-radius: 5px; }
+
+    .emote-info { flex: 1; min-width: 0; }
+    .emote-info-id    { font-family: var(--font-mono); font-size: 0.6rem; color: var(--text-faint); }
+    .emote-info-label { font-size: 0.78rem; font-weight: 600; color: var(--text); }
+    .emote-info-tag {
+      display: inline-block;
+      font-family: var(--font-mono); font-size: 0.5rem; font-weight: 700;
+      padding: 0.1rem 0.35rem; border-radius: 3px;
+      letter-spacing: 0.05em;
+    }
+    .tag-free   { background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.25); color: var(--accent); }
+    .tag-locked { background: rgba(251,191,36,.1);  border: 1px solid rgba(251,191,36,.2);  color: var(--amber); }
+    .tag-builtin{ background: rgba(255,255,255,.05); border: 1px solid var(--border); color: var(--text-faint); }
+
+    .btn-delete {
+      flex-shrink: 0;
+      width: 26px; height: 26px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: transparent;
+      color: var(--text-faint);
+      font-size: 0.7rem;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.15s;
+    }
+    .btn-delete:hover { border-color: var(--red); color: var(--red); background: rgba(248,113,113,.07); }
+
+    .empty-state {
+      font-size: 0.72rem; color: var(--text-faint);
+      text-align: center; padding: 1.5rem;
+      opacity: 0.5;
+    }
+
+    /* ── Toast ── */
+    .toast {
+      position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%) translateY(20px);
+      padding: 0.6rem 1.2rem;
+      border-radius: 8px; font-size: 0.78rem; font-weight: 600;
+      opacity: 0; transition: all 0.25s; pointer-events: none; z-index: 9999;
+      white-space: nowrap;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    .toast.success { background: rgba(16,185,129,.15); border: 1px solid rgba(16,185,129,.3); color: var(--accent); }
+    .toast.error   { background: rgba(248,113,113,.12); border: 1px solid rgba(248,113,113,.25); color: var(--red); }
+
+    .section-sep { margin: 1.2rem 0 0.6rem; font-size: 0.58rem; font-weight: 600;
+                   letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint);
+                   opacity: 0.5; }
+  </style>
+</head>
+<body>
+  <h1>♠ Admin — Emotes</h1>
+
+  <div class="admin-grid">
+
+    <!-- ── Add form ── -->
+    <div class="add-card">
+      <h2>Ajouter une emote</h2>
+
+      <div class="drop-zone" id="drop-zone">
+        <input type="file" id="file-input" accept="image/*" />
+        <span class="drop-zone-text" id="drop-text">Cliquez ou glissez une image</span>
+        <span class="drop-zone-sub">PNG · JPG · WEBP · GIF</span>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label>ID <span style="opacity:.5;font-weight:400">(unique, sans espaces)</span></label>
+          <input type="text" id="f-id" placeholder="mon_emote" maxlength="40" />
+        </div>
+        <div class="field">
+          <label>Emoji fallback</label>
+          <input type="text" id="f-emoji" placeholder="🖼️" maxlength="4" value="🖼️" />
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Nom affiché</label>
+        <input type="text" id="f-label" placeholder="Mon Emote" maxlength="40" />
+      </div>
+
+      <div class="field">
+        <label>Disponibilité</label>
+        <div class="radio-group">
+          <label><input type="radio" name="avail" value="free" checked /> Libre (tout le monde)</label>
+          <label><input type="radio" name="avail" value="locked" /> Verrouillée (succès)</label>
+        </div>
+      </div>
+
+      <div class="field unlock-row" id="unlock-row">
+        <label>Débloquée par le succès</label>
+        <select id="f-achievement">
+          <option value="first_allin">Tout ou Rien — All In pour la 1ère fois</option>
+          <option value="allin_win">All In Hero — Remporter un All In</option>
+          <option value="allin_streak_3">Triple Fougue — All In 3× de suite</option>
+          <option value="first_blackjack">Natural — 1er Blackjack</option>
+          <option value="split_4">Quatuor — Split jusqu'à 4 mains</option>
+          <option value="split_4_win">Maître du Split — Gagner les 4 mains</option>
+          <option value="small_hand_win">David vs Goliath — Gagner avec ≤12</option>
+          <option value="first_surrender">Retraite Tactique — 1er Surrender</option>
+          <option value="hands_100">Habitué — 100 mains</option>
+          <option value="hands_500">Vétéran — 500 mains</option>
+          <option value="losses_500">Masochiste — 500 défaites</option>
+          <option value="hands_1000">Légende — 1 000 mains</option>
+          <option value="win_streak_5">En Feu — 5 victoires de suite</option>
+          <option value="win_streak_10">Inarrêtable — 10 victoires de suite</option>
+          <option value="balance_5000">High Roller — $5 000</option>
+          <option value="balance_10000">Millionnaire — $10 000</option>
+          <option value="broke">Rock Bottom — $0</option>
+          <option value="doubles_won_10">Parieur Audacieux — 10 doubles gagnés</option>
+          <option value="blackjack_10">Favori des Dieux — 10 Blackjacks</option>
+        </select>
+      </div>
+
+      <button class="btn-submit" id="btn-submit" disabled>Ajouter l'emote</button>
+    </div>
+
+    <!-- ── Emote list ── -->
+    <div class="list-card">
+      <h2>Emotes custom <span id="custom-count" style="opacity:.4"></span></h2>
+      <div class="emote-list" id="custom-list"></div>
+
+      <div class="section-sep">Emotes intégrées (lecture seule)</div>
+      <div class="emote-list" id="builtin-list"></div>
+    </div>
+
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const BUILTIN = [
+      { id:'thumbs_up',   emoji:'👍', label:'Bien joué' },
+      { id:'thumbs_down', emoji:'👎', label:'Dommage'   },
+      { id:'lol',         emoji:'😂', label:'LOL'       },
+      { id:'fire',        emoji:'🔥', label:"En feu!"   },
+      { id:'dead',        emoji:'💀', label:'RIP'       },
+      { id:'gg',          emoji:'🎉', label:"GG!"       },
+      { id:'think',       emoji:'🤔', label:"Hmm..."    },
+      { id:'cool',        emoji:'😎', label:'Cool'      },
+      { id:'blackjack',   emoji:'⚡',  label:'Blackjack!',   locked:true, unlockedBy:'first_blackjack' },
+      { id:'allin',       emoji:'💰',  label:'All In!',      locked:true, unlockedBy:'allin_win' },
+      { id:'legendary',   emoji:'🌟',  label:'Légende',      locked:true, unlockedBy:'hands_1000' },
+      { id:'king',        emoji:'👑',  label:'Roi du Split', locked:true, unlockedBy:'split_4_win' },
+      { id:'divine',      emoji:'✨',  label:'Divin',        locked:true, unlockedBy:'blackjack_10' },
+      { id:'volcano',     emoji:'🌋',  label:'Triple Fougue',locked:true, unlockedBy:'allin_streak_3' },
+    ];
+
+    let _fileData = null;
+    let _fileExt  = null;
+    let _customs  = [];
+
+    // ── File drop / pick ──────────────────────────────────────────
+    const dropZone  = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const dropText  = document.getElementById('drop-text');
+
+    function handleFile(file) {
+      if (!file || !file.type.startsWith('image/')) return;
+      _fileExt = file.name.split('.').pop().toLowerCase();
+      const reader = new FileReader();
+      reader.onload = e => {
+        _fileData = e.target.result.split(',')[1]; // base64
+        // Preview
+        let img = dropZone.querySelector('.drop-preview');
+        if (!img) { img = document.createElement('img'); img.className = 'drop-preview'; dropZone.appendChild(img); }
+        img.src = e.target.result;
+        dropText.style.display = 'none';
+        // Auto-fill ID from filename
+        const idEl = document.getElementById('f-id');
+        if (!idEl.value) {
+          idEl.value = file.name.replace(/\.[^.]+$/, '').replace(/[^a-z0-9_-]/gi, '_').toLowerCase();
+        }
+        _validate();
+      };
+      reader.readAsDataURL(file);
+    }
+
+    fileInput.addEventListener('change', e => handleFile(e.target.files[0]));
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      handleFile(e.dataTransfer.files[0]);
+    });
+
+    // ── Availability radio ────────────────────────────────────────
+    document.querySelectorAll('input[name=avail]').forEach(r => {
+      r.addEventListener('change', () => {
+        document.getElementById('unlock-row').classList.toggle('visible', r.value === 'locked' && r.checked);
+      });
+    });
+
+    // ── Validation ────────────────────────────────────────────────
+    function _validate() {
+      const id    = document.getElementById('f-id').value.trim();
+      const label = document.getElementById('f-label').value.trim();
+      document.getElementById('btn-submit').disabled = !(id && label && _fileData);
+    }
+    ['f-id','f-label','f-emoji'].forEach(id => {
+      document.getElementById(id).addEventListener('input', _validate);
+    });
+
+    // ── Submit ────────────────────────────────────────────────────
+    document.getElementById('btn-submit').addEventListener('click', async () => {
+      const id    = document.getElementById('f-id').value.trim().replace(/[^a-z0-9_-]/gi,'_');
+      const label = document.getElementById('f-label').value.trim();
+      const emoji = document.getElementById('f-emoji').value.trim() || '🖼️';
+      const avail = document.querySelector('input[name=avail]:checked').value;
+      const free  = avail === 'free';
+      const unlockedBy = !free ? document.getElementById('f-achievement').value : null;
+
+      const btn = document.getElementById('btn-submit');
+      btn.disabled = true;
+      btn.textContent = 'Ajout en cours…';
+
+      try {
+        const res = await fetch('/api/admin/emotes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, label, emoji, free, unlockedBy, fileData: _fileData, fileExt: _fileExt }),
+        });
+        if (!res.ok) {
+          const err = await res.text();
+          showToast(err === 'ID already exists' ? 'Cet ID existe déjà' : 'Erreur : ' + err, 'error');
+        } else {
+          showToast('Emote ajoutée !', 'success');
+          _reset();
+          await _loadCustom();
+        }
+      } catch(e) {
+        showToast('Erreur réseau', 'error');
+      }
+
+      btn.textContent = 'Ajouter l\'emote';
+      _validate();
+    });
+
+    function _reset() {
+      _fileData = null; _fileExt = null;
+      document.getElementById('f-id').value = '';
+      document.getElementById('f-label').value = '';
+      document.getElementById('f-emoji').value = '🖼️';
+      document.querySelector('input[name=avail][value=free]').checked = true;
+      document.getElementById('unlock-row').classList.remove('visible');
+      const img = dropZone.querySelector('.drop-preview');
+      if (img) img.remove();
+      dropText.style.display = '';
+    }
+
+    // ── Delete ────────────────────────────────────────────────────
+    async function deleteEmote(id) {
+      if (!confirm(`Supprimer l'emote "${id}" ?`)) return;
+      const res = await fetch(`/api/admin/emotes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (res.ok) { showToast('Emote supprimée', 'success'); await _loadCustom(); }
+      else showToast('Erreur', 'error');
+    }
+
+    // ── Render helpers ────────────────────────────────────────────
+    function _thumbHtml(emote) {
+      if (emote.file) return `<img src="/emotes/${emote.file}" alt="" />`;
+      return emote.emoji;
+    }
+
+    function _tagHtml(emote, builtin) {
+      if (builtin) return `<span class="emote-info-tag tag-builtin">intégrée</span>`;
+      if (emote.free) return `<span class="emote-info-tag tag-free">libre</span>`;
+      return `<span class="emote-info-tag tag-locked">succès</span>`;
+    }
+
+    function _renderList(container, items, builtin) {
+      container.innerHTML = '';
+      if (!items.length) {
+        container.innerHTML = `<div class="empty-state">${builtin ? 'Aucune' : 'Aucune emote custom pour l\'instant'}</div>`;
+        return;
+      }
+      items.forEach(emote => {
+        const row = document.createElement('div');
+        row.className = 'emote-row' + (builtin ? ' builtin' : '');
+        row.innerHTML = `
+          <div class="emote-thumb">${_thumbHtml(emote)}</div>
+          <div class="emote-info">
+            <div class="emote-info-label">${emote.label} ${_tagHtml(emote, builtin)}</div>
+            <div class="emote-info-id">${emote.id}${emote.unlockedBy ? ' · via ' + emote.unlockedBy : ''}</div>
+          </div>
+          ${!builtin ? `<button class="btn-delete" data-id="${emote.id}" title="Supprimer">✕</button>` : ''}
+        `;
+        if (!builtin) {
+          row.querySelector('.btn-delete').addEventListener('click', () => deleteEmote(emote.id));
+        }
+        container.appendChild(row);
+      });
+    }
+
+    async function _loadCustom() {
+      const res = await fetch('/api/emotes');
+      _customs = await res.json();
+      document.getElementById('custom-count').textContent = `(${_customs.length})`;
+      _renderList(document.getElementById('custom-list'), _customs, false);
+    }
+
+    // ── Toast ─────────────────────────────────────────────────────
+    let _toastTimer = null;
+    function showToast(msg, type) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.className = `toast ${type} show`;
+      clearTimeout(_toastTimer);
+      _toastTimer = setTimeout(() => t.classList.remove('show'), 3000);
+    }
+
+    // ── Init ──────────────────────────────────────────────────────
+    _renderList(document.getElementById('builtin-list'), BUILTIN, true);
+    _loadCustom();
+  </script>
+</body>
+</html>

@@ -251,6 +251,7 @@ window.AchievementsClient = (() => {
         <div class="ach-card-desc">${ach.desc}</div>
         <div class="ach-card-footer">
           <div class="ach-card-reward reward-${ach.reward.type}">${rewardText}</div>
+          ${ach.emote ? `<div class="ach-card-reward reward-emote">${ach.emote.emoji} ${ach.emote.label}</div>` : ''}
           ${!isUnlocked ? '<span class="ach-card-lock">🔒</span>' : ''}
         </div>
       `;

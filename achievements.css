@@ -309,6 +309,11 @@
   border: 1px solid rgba(192,132,252,.22);
   color: var(--rose);
 }
+.ach-card-reward.reward-emote {
+  background: rgba(99,202,253,.08);
+  border: 1px solid rgba(99,202,253,.22);
+  color: rgb(99,202,253);
+}
 .ach-card-lock {
   font-size: 0.7rem;
   opacity: 0.4;

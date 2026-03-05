@@ -89,7 +89,7 @@ window.EmotesClient = (() => {
     const t = document.createElement('div');
     t.className = 'emote-unlock-toast';
     t.innerHTML = `
-      <span class="emote-unlock-emoji">${emote.emoji}</span>
+      <span class="emote-unlock-emoji">${_emoteContent(emote)}</span>
       <div class="emote-unlock-body">
         <span class="emote-unlock-label">Emote débloquée</span>
         <span class="emote-unlock-name">${emote.label}</span>
@@ -193,7 +193,7 @@ window.EmotesClient = (() => {
       const locked = emote && !_unlockedIds.has(emoteId);
 
       if (emote && !locked) {
-        btn.textContent = emote.emoji;
+        btn.innerHTML = _emoteContent(emote);
         btn.title = emote.label;
         // Click always works regardless of mode
         btn.addEventListener('click', e => { e.stopPropagation(); _sendEmote(emoteId); });
@@ -275,13 +275,23 @@ window.EmotesClient = (() => {
     el.style.left = `${anchorX}px`;
     el.style.top  = `${anchorY}px`;
     el.innerHTML = `
-      <div class="emote-popup-emoji">${emote.emoji}</div>
+      <div class="emote-popup-emoji">${_emoteContent(emote)}</div>
       <div class="emote-popup-name">${_esc(pseudo)}</div>
     `;
     document.body.appendChild(el);
 
     requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('show')));
     setTimeout(() => { el.classList.add('rise'); setTimeout(() => el.remove(), 600); }, 1800);
+  }
+
+  // Returns HTML string: <img> if emote has png:true, otherwise the emoji character
+  // Returns HTML: <img> if emote has a file defined, otherwise the emoji character
+  // emote.file = explicit filename (e.g. 'eric.jpg'), or emote.png = true for '{id}.png'
+  function _emoteContent(emote) {
+    if (!emote) return '';
+    const file = emote.file || (emote.png ? `${emote.id}.png` : null);
+    if (file) return `<img src="/emotes/${file}" class="emote-img" alt="${emote.label}" draggable="false">`;
+    return emote.emoji;
   }
 
   function _esc(s) {
@@ -349,7 +359,7 @@ window.EmotesClient = (() => {
       btn.style.left = `${PREV_SZ / 2 + x - 18}px`;
       btn.style.top  = `${PREV_SZ / 2 + y - 18}px`;
       btn.title = `Slot ${i + 1}`;
-      btn.textContent = (emote && !locked) ? emote.emoji : (locked ? '🔒' : '·');
+      btn.innerHTML = (emote && !locked) ? _emoteContent(emote) : (locked ? '🔒' : '·');
       if (locked) btn.classList.add('slot-locked');
       if (!emote) btn.classList.add('slot-empty');
 
@@ -376,7 +386,7 @@ window.EmotesClient = (() => {
         .filter(Boolean).join(' ');
       card.disabled = !unlocked;
       card.innerHTML = `
-        <span class="ecard-emoji">${emote.emoji}</span>
+        <span class="ecard-emoji">${_emoteContent(emote)}</span>
         <span class="ecard-label">${emote.label}</span>
         ${!unlocked ? `<span class="ecard-lock">🔒</span>` : ''}
         ${inWheel && unlocked ? `<span class="ecard-check">✓</span>` : ''}
@@ -418,11 +428,27 @@ window.EmotesClient = (() => {
     setTimeout(() => panel.remove(), 250);
   }
 
+  // ── Load custom emotes from server ───────────────────────────────
+  function _loadCustomEmotes() {
+    fetch('/api/emotes')
+      .then(r => r.json())
+      .then(customs => {
+        customs.forEach(e => {
+          if (!e.id || EMOTE_MAP[e.id]) return; // skip duplicates
+          EMOTES.push(e);
+          EMOTE_MAP[e.id] = e;
+          if (e.free) _unlockedIds.add(e.id);
+        });
+      })
+      .catch(() => {});
+  }
+
   // ── Init ──────────────────────────────────────────────────────────
   function init(pseudo, sendFn) {
     _myPseudo = pseudo;
     _send     = sendFn;
     _load();
+    _loadCustomEmotes();
 
     // Hold G → wheel at cursor; release G → send hovered slot
     document.addEventListener('keydown', e => {
