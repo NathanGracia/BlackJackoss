@@ -9,6 +9,8 @@ token.txt
 data/balances.json
 data/balances.json.migrated
 data/blackjackoss.db
+data/blackjackoss.db-shm
+data/blackjackoss.db-wal
 # Garder : data/emotes-custom.json et emotes/ (config + assets)
 
 # OS
