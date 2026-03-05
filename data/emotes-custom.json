@@ -5,5 +5,26 @@
     "emoji": "🖼️",
     "free": true,
     "file": "marex.png"
+  },
+  {
+    "id": "mathieu",
+    "label": "Mathieu",
+    "emoji": "🖼️",
+    "free": true,
+    "file": "mathieu.jpg"
+  },
+  {
+    "id": "eric",
+    "label": "Eric",
+    "emoji": "🖼️",
+    "free": true,
+    "file": "eric.jpg"
+  },
+  {
+    "id": "shrek",
+    "label": "Shrek",
+    "emoji": "🖼️",
+    "free": true,
+    "file": "shrek.jpg"
   }
 ]
