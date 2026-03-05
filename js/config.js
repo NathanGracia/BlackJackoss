@@ -5,5 +5,5 @@
 
 window.Config = {
   DETERMINOSS_TOKEN: '',   // ne pas mettre le token ici — il est lu depuis .env au runtime
-  WS_URL: 'ws://localhost:3000',
+  WS_URL: (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host,
 };
