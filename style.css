@@ -976,6 +976,21 @@ body {
   100% { background-position: 200% 50%; }
 }
 
+/* ── Self-indicator triangle above my seat ──────────────────────── */
+.seat-self-arrow {
+  position: absolute;
+  top: -13px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left:  7px solid transparent;
+  border-right: 7px solid transparent;
+  border-top:   9px solid rgba(255,255,255,.9);
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,.5));
+  pointer-events: none;
+}
+
 .seat.my-seat {
   border-color: rgba(16,185,129,.28);
   background: rgba(16,185,129,.05);

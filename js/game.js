@@ -56,6 +56,8 @@ const Game = (() => {
       // Restore skin saved for this specific pseudo
       const savedSkin = localStorage.getItem('bj-skin-' + myPseudo) || '';
       send({ type: 'setSkin', skin: savedSkin });
+      // Init emotes system
+      if (window.EmotesClient) EmotesClient.init(myPseudo, send);
     }
 
     if (msg.type === 'achievements') {
@@ -70,6 +72,10 @@ const Game = (() => {
       const prev = lastState;
       lastState  = msg.state;
       onState(msg.state, prev);
+    }
+
+    if (msg.type === 'emote') {
+      if (window.EmotesClient) EmotesClient.showIncomingEmote(msg.pseudo, msg.emoteId, msg.x, msg.y);
     }
 
     if (msg.type === 'error') {
@@ -308,17 +314,14 @@ const Game = (() => {
     container.classList.toggle('allin', !!isAllIn);
 
     const activePseudo = state.players[state.activePlayerIdx]?.pseudo;
+    // Global consistent order: seatIndex ascending = left to right, same for all players
     const sorted = [...state.players].sort((a, b) => a.seatIndex - b.seatIndex);
     if (!sorted.length) return;
 
-    // Rotate so that I am always at the center position (circular table view)
     const N      = sorted.length;
     const center = Math.floor(N / 2);
-    const meIdx  = sorted.findIndex(p => p.pseudo === myPseudo);
-    const offset = meIdx >= 0 ? ((meIdx - center) % N + N) % N : 0;
-    const display = sorted.map((_, i) => sorted[(offset + i) % N]);
 
-    display.forEach((p, i) => {
+    sorted.forEach((p, i) => {
       const isMe     = p.pseudo === myPseudo;
       const isActive = p.pseudo === activePseudo && state.phase === 'PLAYER_TURN';
       const allDone  = p.hands.length > 0 && p.hands.every(h => h.done);
@@ -340,6 +343,13 @@ const Game = (() => {
       // Arc lift: seats farther from center are raised toward the dealer
       const dist = Math.abs(i - center);
       seat.style.transform = `translateY(-${dist * 26}px)`;
+
+      // ── Self indicator triangle ──
+      if (isMe) {
+        const arrow = document.createElement('div');
+        arrow.className = 'seat-self-arrow';
+        seat.appendChild(arrow);
+      }
 
       // ── Name row ──
       const nameRow = document.createElement('div');
@@ -1281,6 +1291,13 @@ const Game = (() => {
     // Skins button
     document.getElementById('btn-skins')?.addEventListener('click', () => {
       AchievementsClient.openSkinPanel();
+    });
+
+    // Emotes button — open wheel centered on the button
+    document.getElementById('btn-emotes')?.addEventListener('click', function() {
+      if (!window.EmotesClient) return;
+      const r = this.getBoundingClientRect();
+      EmotesClient.openWheel(r.left + r.width / 2, r.top + r.height / 2, false);
     });
 
     // Refill button

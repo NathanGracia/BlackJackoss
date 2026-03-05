@@ -311,6 +311,7 @@ window.AchievementsClient = (() => {
     _updateHeaderBtn();
     if (_panelOpen)     _buildPanel();
     if (_skinPanelOpen) _buildSkinPanel();
+    if (window.EmotesClient) EmotesClient.onAchievementUnlocked(ach.id);
   }
 
   return { init, setUnlocked, setSkin, onUnlocked, openPanel, closePanel, openSkinPanel, closeSkinPanel };

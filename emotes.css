@@ -1,0 +1,455 @@
+/* ════════════════════════════════════════════════════════════════════
+   EMOTES — Wheel · Popup · Customize · Unlock toast
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── Emote button (bet row, left side) ───────────────────────────── */
+.emotes-btn {
+  flex-shrink: 0;
+  margin-left: auto;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  cursor: pointer;
+  transition: all 0.15s;
+  align-self: center;
+}
+.emotes-btn:hover {
+  border-color: rgba(99,202,253,.35);
+  background: rgba(99,202,253,.08);
+  transform: scale(1.08);
+}
+.emotes-btn.on-cooldown {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* ── Wheel overlay (full-screen, transparent — just for pointer capture) */
+#emote-wheel-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: transparent;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+#emote-wheel-overlay.open {
+  opacity: 1;
+  pointer-events: all;
+}
+
+/* ── Wheel container — positioned by JS at cursor ────────────────── */
+.emote-wheel {
+  position: absolute;   /* JS sets left / top */
+  width: 220px;
+  height: 220px;
+  transform: scale(0.72);
+  transition: transform 0.2s cubic-bezier(.22,.8,.32,1);
+}
+#emote-wheel-overlay.open .emote-wheel {
+  transform: scale(1);
+}
+
+/* ── Individual slot ─────────────────────────────────────────────── */
+.emote-slot {
+  position: absolute;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,.14);
+  background: rgba(13,13,20,.9);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  font-size: 1.4rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.12s, border-color 0.12s, background 0.12s, box-shadow 0.12s;
+  box-shadow: 0 4px 12px rgba(0,0,0,.45);
+}
+.emote-slot:hover:not(.slot-locked):not(.slot-empty),
+.emote-slot.wheel-hovered:not(.slot-locked):not(.slot-empty) {
+  transform: scale(1.28);
+  border-color: var(--accent);
+  background: rgba(16,185,129,.2);
+  box-shadow: 0 0 16px rgba(16,185,129,.3);
+}
+/* Extra punch for hold-mode hover */
+.emote-slot.wheel-hovered:not(.slot-locked):not(.slot-empty) {
+  transform: scale(1.35);
+  box-shadow: 0 0 20px rgba(16,185,129,.4), 0 0 0 2px rgba(16,185,129,.25);
+}
+.emote-slot:active:not(.slot-locked) {
+  transform: scale(1.05);
+}
+.emote-slot.slot-locked {
+  opacity: 0.3;
+  cursor: default;
+  font-size: 1rem;
+}
+.emote-slot.slot-empty {
+  opacity: 0.35;
+  border-style: dashed;
+  cursor: pointer;
+  font-size: 1.2rem;
+  color: rgba(255,255,255,.4);
+  letter-spacing: 0;
+}
+.emote-slot.slot-empty:hover {
+  opacity: 0.65;
+  border-color: rgba(255,255,255,.28);
+  transform: scale(1.1);
+}
+
+/* ── Center configure button ─────────────────────────────────────── */
+.emote-center-btn {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.1);
+  background: rgba(13,13,20,.88);
+  color: var(--text-faint);
+  font-size: 0.82rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  box-shadow: 0 2px 8px rgba(0,0,0,.35);
+  z-index: 1;
+}
+.emote-center-btn:hover {
+  border-color: rgba(255,255,255,.22);
+  color: var(--text);
+  background: rgba(30,32,44,.95);
+  transform: translate(-50%, -50%) scale(1.12);
+}
+
+/* ── Incoming emote popup ────────────────────────────────────────── */
+/* Anchored to seat via JS-set left/top (seat center-top).
+   Pops up from below the anchor point, then rises and fades.        */
+.emote-popup {
+  position: fixed;
+  z-index: 9500;
+  text-align: center;
+  pointer-events: none;
+  /* start: just below anchor, small, invisible */
+  transform: translateX(-50%) translateY(0) scale(0.5);
+  opacity: 0;
+  transition: opacity 0.3s cubic-bezier(.22,.8,.32,1),
+              transform 0.3s cubic-bezier(.22,.8,.32,1);
+}
+/* pop in: translate upward by full popup height + gap */
+.emote-popup.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(-100%) scale(1);
+}
+/* rise out: keep floating up and fade */
+.emote-popup.rise {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-170%) scale(0.88);
+  transition: opacity 0.55s ease, transform 0.55s ease;
+}
+
+.emote-popup-emoji {
+  font-size: 2.6rem;
+  line-height: 1;
+  display: block;
+  filter: drop-shadow(0 0 10px rgba(255,255,255,.22));
+}
+.emote-popup-name {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: rgba(255,255,255,.5);
+  margin-top: 0.22rem;
+  letter-spacing: 0.04em;
+}
+
+/* ── Emote unlock toast (bottom-left, distinct from achievement) ─── */
+.emote-unlock-toast {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 1.5rem;
+  z-index: 11000;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: rgba(13,13,20,.95);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(99,202,253,.18);
+  border-left: 3px solid rgb(99,202,253);
+  border-radius: 10px;
+  box-shadow: 0 10px 32px rgba(0,0,0,.6), 0 0 20px rgba(99,202,253,.05);
+  opacity: 0;
+  transform: translateX(-110%);
+  transition: opacity 0.35s ease, transform 0.35s cubic-bezier(.22,.8,.32,1);
+  pointer-events: none;
+  max-width: 280px;
+}
+.emote-unlock-toast.show {
+  opacity: 1;
+  transform: translateX(0);
+}
+.emote-unlock-emoji {
+  font-size: 1.8rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.emote-unlock-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+}
+.emote-unlock-label {
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgb(99,202,253);
+  opacity: 0.8;
+}
+.emote-unlock-name {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+/* ── Customize panel overlay ─────────────────────────────────────── */
+#emote-customize-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5,6,10,.82);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+}
+#emote-customize-panel.open {
+  opacity: 1;
+  pointer-events: all;
+}
+
+/* ── Customize box ───────────────────────────────────────────────── */
+.emote-custom-box {
+  width: min(92vw, 520px);
+  max-height: 86vh;
+  background: var(--bg-main);
+  border: 1px solid rgba(255,255,255,.07);
+  border-top: 1px solid rgba(99,202,253,.18);
+  border-radius: 14px;
+  box-shadow: 0 28px 70px rgba(0,0,0,.8), 0 0 0 1px rgba(99,202,253,.05);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transform: translateY(20px) scale(0.97);
+  transition: transform 0.28s cubic-bezier(.22,.8,.32,1);
+}
+#emote-customize-panel.open .emote-custom-box {
+  transform: translateY(0) scale(1);
+}
+
+.emote-custom-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 1rem 1.25rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.emote-custom-title {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgb(99,202,253);
+  flex: 1;
+}
+.emote-custom-close {
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.emote-custom-close:hover {
+  border-color: var(--red);
+  color: var(--red);
+  background: rgba(248,113,113,.07);
+}
+
+/* ── Hint bar ────────────────────────────────────────────────────── */
+.emote-custom-hint {
+  padding: 0.5rem 1.25rem;
+  font-size: 0.68rem;
+  color: var(--text-faint);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+.emote-custom-hint.flash {
+  background: rgba(248,113,113,.1);
+  color: var(--red);
+}
+
+/* ── Wheel preview in customize panel ───────────────────────────── */
+.emote-custom-slots {
+  display: flex;
+  justify-content: center;
+  padding: 0.85rem 1.25rem 0.9rem;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.emote-preview-wheel {
+  position: relative;
+  width: 160px;
+  height: 160px;
+  flex-shrink: 0;
+}
+
+.emote-preview-center {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.emote-preview-slot {
+  position: absolute;
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border);
+  background: var(--bg-surface);
+  font-size: 1.1rem;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: transform 0.12s, border-color 0.12s, background 0.12s, box-shadow 0.12s;
+}
+.emote-preview-slot:hover:not(.slot-locked) {
+  border-color: rgba(99,202,253,.4);
+  background: rgba(99,202,253,.08);
+  transform: scale(1.15);
+}
+.emote-preview-slot.selected {
+  border-color: rgb(99,202,253);
+  background: rgba(99,202,253,.15);
+  box-shadow: 0 0 0 3px rgba(99,202,253,.2), 0 0 10px rgba(99,202,253,.25);
+  transform: scale(1.18);
+}
+.emote-preview-slot.slot-locked {
+  opacity: 0.3;
+  cursor: default;
+  font-size: 0.75rem;
+}
+.emote-preview-slot.slot-empty {
+  opacity: 0.35;
+  border-style: dashed;
+  font-size: 1rem;
+  color: rgba(255,255,255,.3);
+}
+
+/* ── Section title ───────────────────────────────────────────────── */
+.emote-custom-section-title {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: 0.7rem 1.25rem 0.2rem;
+  flex-shrink: 0;
+}
+
+/* ── Emote selection grid ────────────────────────────────────────── */
+.emote-custom-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 0.5rem;
+  padding: 0.4rem 1.25rem 1.1rem;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,.06) transparent;
+}
+.emote-ecard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.6rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-surface);
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+}
+.emote-ecard:hover:not(:disabled) {
+  border-color: rgba(99,202,253,.35);
+  background: rgba(99,202,253,.08);
+  transform: translateY(-2px);
+}
+.emote-ecard.in-wheel {
+  border-color: rgba(16,185,129,.28);
+  background: rgba(16,185,129,.06);
+}
+.emote-ecard.locked {
+  opacity: 0.35;
+  filter: grayscale(0.6);
+  cursor: default;
+}
+.ecard-emoji {
+  font-size: 1.6rem;
+  line-height: 1;
+  display: block;
+}
+.ecard-label {
+  font-size: 0.58rem;
+  color: var(--text-faint);
+  text-align: center;
+  line-height: 1.3;
+}
+.ecard-lock {
+  position: absolute;
+  top: 3px; right: 4px;
+  font-size: 0.6rem;
+  opacity: 0.6;
+}
+.ecard-check {
+  position: absolute;
+  top: 3px; right: 4px;
+  font-size: 0.6rem;
+  color: var(--accent);
+  font-weight: 700;
+}

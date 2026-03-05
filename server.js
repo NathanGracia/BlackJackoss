@@ -139,6 +139,19 @@ wss.on('connection', ws => {
       if (r && r.error) ws.send(JSON.stringify({ type:'error', message: r.error }));
       return;
     }
+
+    // ── emote ────────────────────────────────────────────────────
+    if (msg.type === 'emote') {
+      const emoteId = String(msg.emoteId || '').trim().slice(0, 30);
+      if (!emoteId) return;
+      const x = typeof msg.x === 'number' ? Math.max(0, Math.min(1, msg.x)) : null;
+      const y = typeof msg.y === 'number' ? Math.max(0, Math.min(1, msg.y)) : null;
+      const out = JSON.stringify({ type: 'emote', pseudo: myPseudo, emoteId, x, y });
+      wss.clients.forEach(client => {
+        if (client.readyState === client.OPEN) client.send(out);
+      });
+      return;
+    }
   });
 
   ws.on('close', () => {
