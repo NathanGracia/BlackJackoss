@@ -183,9 +183,42 @@
     .section-sep { margin: 1.2rem 0 0.6rem; font-size: 0.58rem; font-weight: 600;
                    letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint);
                    opacity: 0.5; }
+
+    /* ── Auth overlay ── */
+    #auth-overlay {
+      position: fixed; inset: 0; z-index: 100;
+      background: var(--bg-main);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .auth-box {
+      width: 320px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 2rem;
+      display: flex; flex-direction: column; gap: 1rem;
+    }
+    .auth-box h2 { font-size: 1rem; font-weight: 700; color: var(--text); margin: 0; }
+    .auth-box p  { font-size: 0.7rem; color: var(--text-faint); margin: 0; }
+    .auth-error  { font-size: 0.7rem; color: var(--red); display: none; }
   </style>
 </head>
 <body>
+
+  <!-- Auth overlay -->
+  <div id="auth-overlay">
+    <div class="auth-box">
+      <h2>♠ BlackJackoss Admin</h2>
+      <p>Mot de passe requis pour accéder à cette page.</p>
+      <div class="field">
+        <label>Mot de passe</label>
+        <input type="password" id="auth-pwd" placeholder="••••••••" autocomplete="current-password" />
+      </div>
+      <span class="auth-error" id="auth-error">Mot de passe incorrect.</span>
+      <button class="btn-submit" id="auth-btn" style="margin-top:0" onclick="doLogin()">Connexion</button>
+    </div>
+  </div>
+
   <h1>♠ Admin — Emotes</h1>
 
   <div class="admin-grid">
@@ -283,6 +316,50 @@
       { id:'volcano',     emoji:'🌋',  label:'Triple Fougue',locked:true, unlockedBy:'allin_streak_3' },
     ];
 
+    // ── Auth ──────────────────────────────────────────────────────
+    let _pwd = sessionStorage.getItem('admin-pwd') || '';
+
+    function authHeaders() {
+      return { 'Authorization': `Bearer ${_pwd}`, 'Content-Type': 'application/json' };
+    }
+
+    async function doLogin() {
+      const pwd = document.getElementById('auth-pwd').value;
+      document.getElementById('auth-btn').disabled = true;
+      // Test by calling a POST (bad body → 400 if auth ok, 401 if wrong)
+      const r = await fetch('/api/admin/emotes', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${pwd}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      document.getElementById('auth-btn').disabled = false;
+      if (r.status === 401) {
+        document.getElementById('auth-error').style.display = '';
+        document.getElementById('auth-pwd').focus();
+        return;
+      }
+      _pwd = pwd;
+      sessionStorage.setItem('admin-pwd', _pwd);
+      document.getElementById('auth-overlay').style.display = 'none';
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('auth-pwd').addEventListener('keydown', e => {
+        if (e.key === 'Enter') doLogin();
+      });
+      // Auto-login if saved session
+      if (_pwd) {
+        fetch('/api/admin/emotes', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${_pwd}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        }).then(r => {
+          if (r.status !== 401) document.getElementById('auth-overlay').style.display = 'none';
+          else { sessionStorage.removeItem('admin-pwd'); _pwd = ''; }
+        });
+      }
+    });
+
     let _fileData = null;
     let _fileExt  = null;
     let _customs  = [];
@@ -355,7 +432,7 @@
       try {
         const res = await fetch('/api/admin/emotes', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders(),
           body: JSON.stringify({ id, label, emoji, free, unlockedBy, fileData: _fileData, fileExt: _fileExt }),
         });
         if (!res.ok) {
@@ -389,7 +466,7 @@
     // ── Delete ────────────────────────────────────────────────────
     async function deleteEmote(id) {
       if (!confirm(`Supprimer l'emote "${id}" ?`)) return;
-      const res = await fetch(`/api/admin/emotes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const res = await fetch(`/api/admin/emotes/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${_pwd}` } });
       if (res.ok) { showToast('Emote supprimée', 'success'); await _loadCustom(); }
       else showToast('Erreur', 'error');
     }
