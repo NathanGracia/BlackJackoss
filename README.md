@@ -66,6 +66,41 @@ docker compose up           # ensuite
 
 ---
 
+## Chat & Émotes
+
+### Chat
+- Champ texte en bas à droite (max 80 caractères), envoi avec Entrée
+- Le message apparaît en bulle flottante au-dessus du seat de l'émetteur, visible par tous
+- Broadcast immédiat à tous les clients connectés
+
+### Émotes
+- **8 emotes libres** accessibles à tous (👍 👎 😂 🔥 💀 🎉 🤔 😎)
+- **6 emotes débloquables** via succès (⚡ 💰 🌟 👑 ✨ 🌋)
+- **Ouverture de la roue** : maintenir `G` n'importe où sur la table, relâcher sur un slot pour envoyer — ou cliquer le bouton `😀`
+- **Zone morte** : 30px au centre de la roue, aucun slot sélectionné
+- **Personnalisation** : bouton ⚙ au centre de la roue → panel pour assigner les emotes aux 8 slots
+- La config de la roue est sauvegardée dans `localStorage` par pseudo
+- L'émote apparaît en popup flottant à la position du curseur de l'émetteur, visible par tous
+
+### Admin — emotes personnalisées
+Endpoint non protégé, usage interne :
+
+```bash
+# Lister
+GET /api/emotes
+
+# Ajouter (fileData = base64 de l'image)
+POST /api/admin/emotes
+{ "id": "eric", "label": "Eric", "fileData": "...", "fileExt": "jpg", "free": true }
+
+# Supprimer
+DELETE /api/admin/emotes/:id
+```
+
+Images servies depuis `/emotes/`, config dans `data/emotes-custom.json`.
+
+---
+
 ## Succès
 
 19 succès débloquables liés à chaque pseudo :

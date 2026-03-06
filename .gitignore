@@ -5,8 +5,13 @@ node_modules/
 token.txt
 .env
 
-# Balances (données runtime, pas à committer)
+# Données joueurs (runtime, pas à committer)
 data/balances.json
+data/balances.json.migrated
+data/blackjackoss.db
+data/blackjackoss.db-shm
+data/blackjackoss.db-wal
+# Garder : data/emotes-custom.json et emotes/ (config + assets)
 
 # OS
 .DS_Store

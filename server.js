@@ -10,6 +10,25 @@ const { ACHIEVEMENT_MAP } = require('./server/achievements-def');
 
 const PORT = process.env.PORT || 3000;
 
+// ─── Admin password (reuses token.txt / DETERMINOSS_TOKEN) ────────────────────
+let ADMIN_PASSWORD = '';
+try {
+  ADMIN_PASSWORD = fs.readFileSync(path.join(__dirname, 'token.txt'), 'utf8').trim();
+} catch (_) {
+  ADMIN_PASSWORD = process.env.DETERMINOSS_TOKEN || '';
+}
+if (ADMIN_PASSWORD) {
+  console.info('[Config] Admin password loaded from token');
+} else {
+  console.warn('[Config] No token set — admin endpoints are open');
+}
+
+function checkAdminAuth(req) {
+  if (!ADMIN_PASSWORD) return true;
+  const auth = req.headers['authorization'] || '';
+  return auth === `Bearer ${ADMIN_PASSWORD}`;
+}
+
 // ─── Custom emotes helpers ─────────────────────────────────────────────────────
 const EMOTES_FILE = path.join(__dirname, 'data', 'emotes-custom.json');
 const EMOTES_DIR  = path.join(__dirname, 'emotes');
@@ -41,6 +60,7 @@ const httpServer = http.createServer((req, res) => {
 
   // ── POST /api/admin/emotes ──────────────────────────────────────
   if (req.method === 'POST' && url === '/api/admin/emotes') {
+    if (!checkAdminAuth(req)) { res.writeHead(401, { 'WWW-Authenticate': 'Bearer' }); res.end('Unauthorized'); return; }
     let body = '';
     req.on('data', c => body += c);
     req.on('end', () => {
@@ -72,6 +92,7 @@ const httpServer = http.createServer((req, res) => {
 
   // ── DELETE /api/admin/emotes/:id ────────────────────────────────
   if (req.method === 'DELETE' && url.startsWith('/api/admin/emotes/')) {
+    if (!checkAdminAuth(req)) { res.writeHead(401, { 'WWW-Authenticate': 'Bearer' }); res.end('Unauthorized'); return; }
     const id = url.slice('/api/admin/emotes/'.length);
     const emotes = readCustomEmotes();
     const idx = emotes.findIndex(e => e.id === id);
@@ -88,6 +109,8 @@ const httpServer = http.createServer((req, res) => {
   // ── Static files ────────────────────────────────────────────────
   let filePath = path.join(__dirname, url === '/' ? 'index.html' : url);
   if (!filePath.startsWith(__dirname)) { res.writeHead(403); res.end(); return; }
+  // Clean URLs: if no extension, try appending .html
+  if (!path.extname(filePath)) filePath += '.html';
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); res.end('Not found'); return; }
     const ext  = path.extname(filePath);

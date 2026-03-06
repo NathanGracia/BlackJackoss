@@ -126,16 +126,22 @@ Original solo game logic. Loads only in `solo.html`. No WebSocket.
 { type: 'action',     action }       // 'hit'|'stand'|'double'|'split'|'surrender'
 { type: 'insurance',  take: bool }
 { type: 'setAutoBet', enabled: bool }
+{ type: 'refill' }                   // reset balance to $1000 (only in IDLE when broke)
+{ type: 'setSkin',    skin }         // CSS theme class name for .game-table
 { type: 'shuffle' }
+{ type: 'chat',       text }         // max 80 chars, broadcast to all
+{ type: 'emote',      emoteId, x, y } // x/y = viewport fractions [0-1] for popup position
 ```
 
 ### Server → Client
 ```js
-{ type: 'welcome',             pseudo, balance }         // unicast on join
-{ type: 'achievements',        list: [{id,name,...}] }   // unicast on join
-{ type: 'state',               state }                   // broadcast after every mutation
-{ type: 'error',               message }                 // unicast on invalid action
-{ type: 'achievement_unlocked', achievement }            // unicast on unlock
+{ type: 'welcome',              pseudo, balance }         // unicast on join
+{ type: 'achievements',         list: [{id,name,...}] }   // unicast on join
+{ type: 'state',                state }                   // broadcast after every mutation
+{ type: 'error',                message }                 // unicast on invalid action
+{ type: 'achievement_unlocked', achievement }             // unicast on unlock
+{ type: 'chat',                 pseudo, text }            // broadcast to all
+{ type: 'emote',                pseudo, emoteId, x, y }  // broadcast to all
 ```
 
 ### State shape
@@ -158,6 +164,29 @@ Original solo game logic. Loads only in `solo.html`. No WebSocket.
   seedJpeg:        null,   // base64 lava-lamp frame during shuffle
 }
 ```
+
+## Custom emotes (admin API)
+
+Endpoints on the HTTP server (no auth — internal use only):
+
+```bash
+GET  /api/emotes                    # list all custom emotes
+POST /api/admin/emotes              # add emote
+  { id, label, emoji?, free?, unlockedBy?, fileData (base64), fileExt }
+DELETE /api/admin/emotes/:id        # remove emote
+```
+
+Images stored in `/emotes/`, config in `data/emotes-custom.json`. Allowed file types: `png`, `jpg`, `jpeg`, `webp`, `gif`.
+
+Built-in free emotes (hardcoded client-side): 👍 👎 😂 🔥 💀 🎉 🤔 😎
+Unlockable emotes (via achievement id): ⚡ 💰 🌟 👑 ✨ 🌋
+
+### `js/emotes.js`
+`window.EmotesClient` IIFE:
+- `init(pseudo, unlockedAchievements)` — loads custom emotes from `/api/emotes`, builds wheel
+- `openWheel(cx, cy, holdMode)` — renders 8-slot radial wheel at cursor; hold-G or button click
+- `showIncomingEmote(pseudo, emoteId, x, y)` — floating popup at fractional viewport position; seats-aware fallback
+- `openCustomize()` — drag-to-assign panel; saves slot config to `localStorage('bj-emotes-wheel-' + pseudo)`
 
 ## Key rules implemented
 
