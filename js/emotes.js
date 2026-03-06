@@ -33,10 +33,11 @@ window.EmotesClient = (() => {
   const DEAD_ZONE   = 30;    // px from center — no slot selected
   const COOLDOWN_MS = 0;
 
-  let _myPseudo      = null;
-  let _send          = null;
-  let _unlockedIds   = new Set(FREE_IDS);
-  let _wheel         = FREE_IDS.slice(0, WHEEL_SIZE);
+  let _myPseudo        = null;
+  let _send            = null;
+  let _unlockedIds     = new Set(FREE_IDS);
+  let _wheel           = FREE_IDS.slice(0, WHEEL_SIZE);
+  let _hasPersonalWheel = false;
   let _cooldownUntil = 0;
   let _wheelOpen     = false;
   let _holdMode      = false;   // true = opened by G key
@@ -68,7 +69,7 @@ window.EmotesClient = (() => {
   function _load() {
     try {
       const w = JSON.parse(localStorage.getItem(_lsWheel()));
-      if (Array.isArray(w) && w.length === WHEEL_SIZE) _wheel = w;
+      if (Array.isArray(w) && w.length === WHEEL_SIZE) { _wheel = w; _hasPersonalWheel = true; }
     } catch(_) {}
     try {
       const u = JSON.parse(localStorage.getItem(_lsUnlocked()));
@@ -449,6 +450,15 @@ window.EmotesClient = (() => {
     _send     = sendFn;
     _load();
     _loadCustomEmotes();
+    // If no personal config saved, apply server default wheel
+    if (!_hasPersonalWheel) {
+      fetch('/api/wheel-default')
+        .then(r => r.json())
+        .then(def => {
+          if (Array.isArray(def) && def.length === WHEEL_SIZE && !_hasPersonalWheel) _wheel = def;
+        })
+        .catch(() => {});
+    }
 
     // Hold G → wheel at cursor; release G → send hovered slot
     document.addEventListener('keydown', e => {

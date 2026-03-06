@@ -184,6 +184,126 @@
                    letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint);
                    opacity: 0.5; }
 
+    /* ── Default wheel section ── */
+    .dw-section {
+      margin-top: 2rem;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+    }
+    .dw-section h2 { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.1em;
+                     text-transform: uppercase; color: var(--text-faint); margin-bottom: 0.4rem; }
+    .dw-desc { font-size: 0.68rem; color: var(--text-faint); margin-bottom: 1.5rem; opacity: 0.7; }
+
+    .dw-layout { display: grid; grid-template-columns: 240px 1fr; gap: 2rem; align-items: start; }
+
+    /* preview wheel */
+    .dw-wheel-wrap { display: flex; flex-direction: column; align-items: center; gap: 1rem; }
+    .dw-wheel {
+      position: relative;
+      width: 200px; height: 200px;
+      flex-shrink: 0;
+    }
+    .dw-slot {
+      position: absolute;
+      width: 38px; height: 38px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      background: var(--bg-main);
+      color: var(--text);
+      font-size: 1.2rem;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      transition: border-color 0.15s, transform 0.12s, box-shadow 0.15s;
+      overflow: hidden;
+      padding: 0;
+    }
+    .dw-slot img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+    .dw-slot:hover { border-color: rgba(16,185,129,.5); transform: scale(1.08); }
+    .dw-slot.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(16,185,129,.25);
+      transform: scale(1.12);
+    }
+    .dw-slot.empty { opacity: 0.35; font-size: 0.9rem; }
+    .dw-center {
+      position: absolute;
+      top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.75rem;
+      color: var(--text-faint);
+      pointer-events: none;
+    }
+    .dw-slot-label {
+      font-size: 0.65rem; color: var(--text-faint); text-align: center;
+      min-height: 1.2em;
+    }
+    .dw-hint {
+      font-size: 0.68rem; color: var(--text-faint); text-align: center;
+      min-height: 1em; font-style: italic; opacity: 0.7;
+    }
+    .dw-actions { display: flex; gap: 0.5rem; width: 100%; }
+    .dw-save { flex: 1; }
+    .btn-ghost {
+      padding: 0.6rem 1rem;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      color: var(--text-faint);
+      font-family: var(--font);
+      font-size: 0.75rem; font-weight: 600;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .btn-ghost:hover { border-color: rgba(248,113,113,.4); color: var(--red); }
+
+    /* emote picker grid */
+    .dw-picker-title { font-size: 0.6rem; font-weight: 600; letter-spacing: 0.08em;
+                       text-transform: uppercase; color: var(--text-faint); margin-bottom: 0.75rem; }
+    .dw-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(68px, 1fr));
+      gap: 0.4rem;
+      max-height: 320px;
+      overflow-y: auto;
+      padding-right: 0.25rem;
+    }
+    .dw-grid::-webkit-scrollbar { width: 4px; }
+    .dw-grid::-webkit-scrollbar-track { background: transparent; }
+    .dw-grid::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .dw-ecard {
+      display: flex; flex-direction: column; align-items: center; gap: 0.25rem;
+      padding: 0.5rem 0.25rem;
+      background: var(--bg-main);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: border-color 0.12s, background 0.12s;
+      font-family: inherit;
+      color: var(--text);
+    }
+    .dw-ecard:hover { border-color: rgba(16,185,129,.4); background: var(--bg-raised); }
+    .dw-ecard.in-wheel { border-color: var(--accent); background: rgba(16,185,129,.06); }
+    .dw-ecard.selected-source { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(16,185,129,.3); }
+    .dw-ecard.locked-emote { opacity: 0.4; cursor: default; }
+    .dw-ecard-emoji { font-size: 1.4rem; line-height: 1; width: 28px; height: 28px;
+                      display: flex; align-items: center; justify-content: center; }
+    .dw-ecard-emoji img { width: 28px; height: 28px; object-fit: cover; border-radius: 4px; }
+    .dw-ecard-label { font-size: 0.5rem; color: var(--text-faint); text-align: center;
+                      line-height: 1.3; max-width: 64px; overflow: hidden;
+                      text-overflow: ellipsis; white-space: nowrap; }
+    .dw-ecard-badge { font-size: 0.45rem; padding: 0.1rem 0.25rem; border-radius: 3px;
+                      background: rgba(251,191,36,.1); border: 1px solid rgba(251,191,36,.2);
+                      color: var(--amber); letter-spacing: 0.04em; }
+    .dw-section-label { font-size: 0.58rem; font-weight: 600; letter-spacing: 0.08em;
+                        text-transform: uppercase; color: var(--text-faint); opacity: 0.5;
+                        grid-column: 1 / -1; margin-top: 0.5rem; }
+
     /* ── Auth overlay ── */
     #auth-overlay {
       position: fixed; inset: 0; z-index: 100;
@@ -294,6 +414,34 @@
       <div class="emote-list" id="builtin-list"></div>
     </div>
 
+  </div>
+
+  <!-- ── Default wheel section ── -->
+  <div class="dw-section">
+    <h2>Roue par défaut</h2>
+    <p class="dw-desc">Configuration utilisée pour les joueurs sans préférence personnelle enregistrée.</p>
+    <div class="dw-layout">
+
+      <!-- Preview wheel + controls -->
+      <div class="dw-wheel-wrap">
+        <div class="dw-wheel" id="dw-wheel">
+          <div class="dw-center">⚙</div>
+        </div>
+        <div class="dw-slot-label" id="dw-slot-label">—</div>
+        <div class="dw-hint" id="dw-hint">Cliquez un slot pour le sélectionner</div>
+        <div class="dw-actions">
+          <button class="btn-submit dw-save" id="dw-save">Sauvegarder</button>
+          <button class="btn-ghost" id="dw-reset" title="Remettre à zéro">↺</button>
+        </div>
+      </div>
+
+      <!-- Emote picker -->
+      <div>
+        <div class="dw-picker-title">Choisir une émote</div>
+        <div class="dw-grid" id="dw-grid"></div>
+      </div>
+
+    </div>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -512,6 +660,7 @@
       _customs = await res.json();
       document.getElementById('custom-count').textContent = `(${_customs.length})`;
       _renderList(document.getElementById('custom-list'), _customs, false);
+      return _customs;
     }
 
     // ── Toast ─────────────────────────────────────────────────────
@@ -524,9 +673,175 @@
       _toastTimer = setTimeout(() => t.classList.remove('show'), 3000);
     }
 
+    // ── Default wheel ─────────────────────────────────────────────
+    const WHEEL_SIZE  = 8;
+    const DW_RADIUS   = 72;
+    const DW_SIZE     = 200;
+    const FREE_IDS    = BUILTIN.filter(e => !e.locked).map(e => e.id);
+
+    let _dw           = FREE_IDS.slice(0, WHEEL_SIZE); // current editing state
+    let _dwSelected   = null;  // slot index selected (null = none)
+    let _dwAllEmotes  = [];    // builtin + custom (flat list)
+
+    function _dwEmoteContent(emote) {
+      if (emote.file) return `<img src="/emotes/${emote.file}" alt="${emote.label}" draggable="false">`;
+      return emote.emoji || '·';
+    }
+
+    function _dwBuildAllEmotes() {
+      // builtin first, then custom
+      _dwAllEmotes = [
+        ...BUILTIN,
+        ..._customs.filter(c => !BUILTIN.find(b => b.id === c.id)),
+      ];
+    }
+
+    function _dwRenderWheel() {
+      const wheel = document.getElementById('dw-wheel');
+      // Remove old slots (keep center)
+      wheel.querySelectorAll('.dw-slot').forEach(el => el.remove());
+
+      _dw.forEach((emoteId, i) => {
+        const angle = (i / WHEEL_SIZE) * Math.PI * 2 - Math.PI / 2;
+        const x     = Math.round(Math.cos(angle) * DW_RADIUS);
+        const y     = Math.round(Math.sin(angle) * DW_RADIUS);
+
+        const emote = _dwAllEmotes.find(e => e.id === emoteId) || null;
+
+        const btn = document.createElement('button');
+        btn.className = 'dw-slot' + (i === _dwSelected ? ' selected' : '') + (!emote ? ' empty' : '');
+        btn.style.left = `${DW_SIZE / 2 + x - 19}px`;
+        btn.style.top  = `${DW_SIZE / 2 + y - 19}px`;
+        btn.title      = emote ? emote.label : `Slot ${i + 1} (vide)`;
+        btn.innerHTML  = emote ? _dwEmoteContent(emote) : '·';
+        btn.dataset.idx = i;
+
+        btn.addEventListener('click', () => {
+          _dwSelected = (_dwSelected === i) ? null : i;
+          _dwRenderWheel();
+          _dwRenderGrid();
+          const hint  = document.getElementById('dw-hint');
+          const label = document.getElementById('dw-slot-label');
+          if (_dwSelected !== null) {
+            const cur = _dw[_dwSelected];
+            const curEmote = cur ? _dwAllEmotes.find(e => e.id === cur) : null;
+            hint.textContent  = `Slot ${_dwSelected + 1} sélectionné — cliquez une émote`;
+            label.textContent = curEmote ? curEmote.label : 'Vide';
+          } else {
+            hint.textContent  = 'Cliquez un slot pour le sélectionner';
+            label.textContent = '—';
+          }
+        });
+
+        wheel.appendChild(btn);
+      });
+    }
+
+    function _dwRenderGrid() {
+      const grid = document.getElementById('dw-grid');
+      grid.innerHTML = '';
+
+      // Free emotes
+      const freeLabel = document.createElement('div');
+      freeLabel.className = 'dw-section-label';
+      freeLabel.textContent = 'Libres';
+      grid.appendChild(freeLabel);
+
+      const freeEmotes   = _dwAllEmotes.filter(e => !e.locked && !e.unlockedBy);
+      const lockedEmotes = _dwAllEmotes.filter(e =>  e.locked ||  e.unlockedBy);
+
+      [...freeEmotes, ...(lockedEmotes.length ? [null] : []), ...lockedEmotes].forEach(emote => {
+        if (emote === null) {
+          const sep = document.createElement('div');
+          sep.className = 'dw-section-label';
+          sep.textContent = 'Verrouillées (succès)';
+          grid.appendChild(sep);
+          return;
+        }
+
+        const isLocked  = emote.locked || emote.unlockedBy;
+        const inWheel   = _dw.includes(emote.id);
+        const isSource  = _dwSelected !== null && _dw[_dwSelected] === emote.id;
+
+        const card = document.createElement('button');
+        card.className = [
+          'dw-ecard',
+          inWheel   ? 'in-wheel'       : '',
+          isSource  ? 'selected-source': '',
+          isLocked  ? 'locked-emote'   : '',
+        ].filter(Boolean).join(' ');
+
+        card.innerHTML = `
+          <div class="dw-ecard-emoji">${_dwEmoteContent(emote)}</div>
+          <div class="dw-ecard-label">${emote.label}</div>
+          ${isLocked ? `<div class="dw-ecard-badge">succès</div>` : ''}
+        `;
+
+        card.addEventListener('click', () => {
+          if (_dwSelected === null) {
+            // flash hint
+            const hint = document.getElementById('dw-hint');
+            hint.style.color = 'var(--red)';
+            setTimeout(() => hint.style.color = '', 600);
+            return;
+          }
+          _dw[_dwSelected] = emote.id;
+          _dwSelected = null;
+          document.getElementById('dw-hint').textContent  = 'Cliquez un slot pour le sélectionner';
+          document.getElementById('dw-slot-label').textContent = '—';
+          _dwRenderWheel();
+          _dwRenderGrid();
+        });
+
+        grid.appendChild(card);
+      });
+    }
+
+    async function _dwLoad() {
+      try {
+        const r = await fetch('/api/wheel-default');
+        const def = await r.json();
+        if (Array.isArray(def) && def.length === WHEEL_SIZE) {
+          _dw = def.map(id => id || null);
+        }
+      } catch(_) {}
+      _dwRenderWheel();
+      _dwRenderGrid();
+    }
+
+    document.getElementById('dw-save').addEventListener('click', async () => {
+      const btn = document.getElementById('dw-save');
+      btn.disabled = true;
+      btn.textContent = 'Sauvegarde…';
+      try {
+        const res = await fetch('/api/admin/wheel-default', {
+          method: 'PUT',
+          headers: authHeaders(),
+          body: JSON.stringify({ wheel: _dw }),
+        });
+        if (res.ok) showToast('Roue par défaut sauvegardée', 'success');
+        else showToast('Erreur ' + res.status, 'error');
+      } catch(_) { showToast('Erreur réseau', 'error'); }
+      btn.disabled = false;
+      btn.textContent = 'Sauvegarder';
+    });
+
+    document.getElementById('dw-reset').addEventListener('click', () => {
+      if (!confirm('Remettre la roue à zéro (émotes libres par défaut) ?')) return;
+      _dw = [...FREE_IDS.slice(0, WHEEL_SIZE)];
+      _dwSelected = null;
+      document.getElementById('dw-hint').textContent  = 'Cliquez un slot pour le sélectionner';
+      document.getElementById('dw-slot-label').textContent = '—';
+      _dwRenderWheel();
+      _dwRenderGrid();
+    });
+
     // ── Init ──────────────────────────────────────────────────────
     _renderList(document.getElementById('builtin-list'), BUILTIN, true);
-    _loadCustom();
+    _loadCustom().then(() => {
+      _dwBuildAllEmotes();
+      _dwLoad();
+    });
   </script>
 </body>
 </html>

@@ -30,8 +30,9 @@ function checkAdminAuth(req) {
 }
 
 // ─── Custom emotes helpers ─────────────────────────────────────────────────────
-const EMOTES_FILE = path.join(__dirname, 'data', 'emotes-custom.json');
-const EMOTES_DIR  = path.join(__dirname, 'emotes');
+const EMOTES_FILE       = path.join(__dirname, 'data', 'emotes-custom.json');
+const WHEEL_DEFAULT_FILE = path.join(__dirname, 'data', 'wheel-default.json');
+const EMOTES_DIR        = path.join(__dirname, 'emotes');
 if (!fs.existsSync(EMOTES_DIR)) fs.mkdirSync(EMOTES_DIR);
 
 function readCustomEmotes() {
@@ -39,6 +40,12 @@ function readCustomEmotes() {
 }
 function writeCustomEmotes(arr) {
   fs.writeFileSync(EMOTES_FILE, JSON.stringify(arr, null, 2));
+}
+function readDefaultWheel() {
+  try { return JSON.parse(fs.readFileSync(WHEEL_DEFAULT_FILE, 'utf8')); } catch(_) { return null; }
+}
+function writeDefaultWheel(arr) {
+  fs.writeFileSync(WHEEL_DEFAULT_FILE, JSON.stringify(arr));
 }
 
 // ─── HTTP server (static files + admin API) ───────────────────────────────────
@@ -55,6 +62,31 @@ const httpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url === '/api/emotes') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(readCustomEmotes()));
+    return;
+  }
+
+  // ── GET /api/wheel-default ──────────────────────────────────────
+  if (req.method === 'GET' && url === '/api/wheel-default') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(readDefaultWheel()));
+    return;
+  }
+
+  // ── PUT /api/admin/wheel-default ─────────────────────────────────
+  if (req.method === 'PUT' && url === '/api/admin/wheel-default') {
+    if (!checkAdminAuth(req)) { res.writeHead(401, { 'WWW-Authenticate': 'Bearer' }); res.end('Unauthorized'); return; }
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => {
+      try {
+        const { wheel } = JSON.parse(body);
+        if (!Array.isArray(wheel) || wheel.length !== 8) { res.writeHead(400); res.end('Invalid wheel'); return; }
+        const sanitized = wheel.map(id => (typeof id === 'string' && id.length > 0) ? id.slice(0, 40) : null);
+        writeDefaultWheel(sanitized);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(sanitized));
+      } catch(e) { res.writeHead(500); res.end('Server error'); }
+    });
     return;
   }
 
